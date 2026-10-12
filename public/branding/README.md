@@ -1,14 +1,18 @@
-# Receipt branding assets
+# Document branding assets
 
-Drop the UVIMO receipt assets here:
+Drop the platform branding assets here:
 
-- `logo.png` — company logo shown at the top of every receipt.
+- `logo.png` — Nipangishe logo shown at the top of receipts and documents.
 - `signature.png` — electronic signature shown in the signature block.
 
 Both are embedded into downloaded receipts automatically. To use different
 filenames or locations, set `RECEIPT_LOGO_PATH` and `RECEIPT_SIGNATURE_PATH`
 in the environment (absolute path, path inside `public/`, path inside
 `storage/app/`, or a full URL).
+
+Landlords can override the name and contact details on their own documents from
+their account settings; this logo is the shared platform asset used when they
+have not uploaded their own.
 
 ## Requirements
 

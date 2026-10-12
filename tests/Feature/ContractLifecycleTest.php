@@ -120,6 +120,33 @@ class ContractLifecycleTest extends TestCase
         $this->assertCount(13, $contract->clause_text);
     }
 
+    public function test_overstay_charge_is_derived_from_the_monthly_rent(): void
+    {
+        // Daily rate: 160000 / 30 = 5333.33. The overstay charge is that same
+        // per-day rate, derived server-side, regardless of what the client sends.
+        Sanctum::actingAs($this->owner);
+
+        $payload = $this->createPayload();
+        $payload['notice_per_day'] = 999999;
+
+        $contract = Contract::findOrFail(
+            $this->postJson('/api/owner/contracts', $payload)->assertCreated()->json('data.id')
+        );
+
+        $this->assertEqualsWithDelta(5333.33, (float) $contract->daily_rate, 0.001);
+        $this->assertSame((float) $contract->daily_rate, (float) $contract->notice_per_day);
+
+        // The document the tenant is actually shown derives from the same
+        // column, so the frozen figure can never disagree with the rent.
+        $this->assertSame(
+            5333.33,
+            (float) $this->get('/api/contracts/sign/'.$this->sendAndFetchToken($contract))
+                ->assertOk()
+                ->json('data.snapshot.figures.notice_per_day'),
+            0.001
+        );
+    }
+
     public function test_creating_a_second_live_contract_for_the_same_rental_is_blocked(): void
     {
         $this->issueContract();

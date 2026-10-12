@@ -2,12 +2,15 @@
 
 namespace App\Http\Concerns;
 
+use App\Models\OwnerSetting;
+
 /**
- * Exposes the configured company branding to anything that renders a document.
+ * Exposes company branding to anything that renders a document.
  *
  * Receipts and tenancy contracts must both look like the same company, so they
  * read the same settings and resolve them the same way instead of each keeping
- * its own copy of the path handling.
+ * its own copy of the path handling. When a landlord has configured their own
+ * details, those win; otherwise the platform brand is used.
  */
 trait ResolvesBrandingAssets
 {
@@ -16,13 +19,23 @@ trait ResolvesBrandingAssets
      *
      * @return array<string, mixed>
      */
-    protected function brandingPayload(): array
+    protected function brandingPayload(?OwnerSetting $settings = null): array
     {
+        $hasOwnerBranding = (bool) $settings?->company_name;
+
         return [
-            'company_name' => config('services.receipt.company_name', 'UVIMO'),
-            'company_slogan' => config('services.receipt.company_slogan'),
-            'company_phone' => config('services.receipt.company_phone'),
-            'company_address' => config('services.receipt.company_address'),
+            'company_name' => $hasOwnerBranding
+                ? $settings->company_name
+                : config('services.receipt.company_name', 'Nipangishe'),
+            // The platform tagline only belongs on platform-branded documents;
+            // a landlord's own letterhead should not carry it.
+            'company_slogan' => $hasOwnerBranding
+                ? null
+                : config('services.receipt.company_slogan'),
+            'company_phone' => $settings?->contact_phone
+                ?: config('services.receipt.company_phone'),
+            'company_address' => $settings?->address
+                ?: config('services.receipt.company_address'),
             'logo_url' => $this->assetUrl(config('services.receipt.logo_path')),
             'signature_url' => $this->assetUrl(config('services.receipt.signature_path')),
         ];

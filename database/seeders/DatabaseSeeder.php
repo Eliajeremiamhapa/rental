@@ -15,10 +15,11 @@ class DatabaseSeeder extends Seeder
     public function run(): void
     {
         // No demo/sample data is seeded on purpose: production deploys must not
-        // gain synthetic houses, rooms or tenants. Only the first owner account
-        // is created, and only when OWNER_PHONE is configured.
+        // gain synthetic houses, rooms or tenants. Only the first owner and
+        // admin accounts are created, and only when their env vars are set.
         $this->call([
             OwnerSeeder::class,
+            AdminSeeder::class,
         ]);
     }
 }

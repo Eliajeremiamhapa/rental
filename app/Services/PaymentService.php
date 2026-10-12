@@ -31,43 +31,16 @@ class PaymentService
                 throw new \InvalidArgumentException('Payment amount must be greater than zero.');
             }
 
-            // Overpayment is allowed: the full received amount is recorded against
-            // the targeted charge, and any excess cascades into the next unpaid
-            // charges of the same rental (chronological). If there is no later
-            // charge left, the surplus stays on the targeted charge as a credit
-            // (paid_amount may exceed expected_amount) and is consumed when the
-            // next period's charge is generated.
-            $chain = RentCharge::query()
-                ->where('rental_id', $charge->rental_id)
-                ->whereIn('status', ['unpaid', 'partial'])
-                ->where('period_start', '>=', $charge->period_start->toDateString())
-                ->orderBy('period_start')
-                ->lockForUpdate()
-                ->get();
+            $oldValues = [
+                'paid_amount' => (float) $charge->paid_amount,
+                'status' => $charge->status,
+            ];
 
-            $amount = (float) $data['amount'];
-            $allocations = []; // [charge_id => amount]
-
-            foreach ($chain as $c) {
-                if ($amount <= 0) {
-                    break;
-                }
-
-                $balance = (float) $c->expected_amount - (float) $c->paid_amount;
-                if ($balance <= 0) {
-                    continue;
-                }
-
-                $applied = min($amount, $balance);
-                $amount -= $applied;
-                $allocations[$c->id] = ($allocations[$c->id] ?? 0) + $applied;
-            }
-
-            // Surplus that no later charge can absorb stays on the targeted charge as credit.
-            if ($amount > 0) {
-                $allocations[$charge->id] = ($allocations[$charge->id] ?? 0) + $amount;
-            }
-
+            // The payment is recorded against the targeted charge, then the whole
+            // rental is re-spread oldest-debt-first. This lets a lump sum settle
+            // earlier arrears and lets an overpayment cover the following period
+            // instead of sitting on one charge as credit the next period cannot
+            // reach.
             $payment = Payment::create([
                 'rent_charge_id' => $charge->id,
                 'tenant_id' => $charge->tenant_id,
@@ -79,16 +52,18 @@ class PaymentService
                 'notes' => $data['notes'] ?? null,
             ]);
 
-            foreach ($allocations as $chargeId => $applied) {
-                $c = RentCharge::query()->whereKey($chargeId)->lockForUpdate()->firstOrFail();
-                $c->update(['paid_amount' => (float) $c->paid_amount + $applied]);
-                $this->rentChargeService->updateChargeStatus($c->fresh());
-            }
+            $charge->update([
+                'paid_amount' => (float) $charge->paid_amount + (float) $payment->amount,
+            ]);
+            $this->rentChargeService->reallocateCredit($charge->rental_id);
 
             $receipt = $this->receiptService->generateReceipt($payment);
 
-            $oldValues = ['paid_amount' => $charge->paid_amount, 'status' => $charge->status];
-            $newValues = ['paid_amount' => $charge->fresh()->paid_amount, 'status' => $charge->fresh()->status];
+            $charge = $charge->fresh();
+            $newValues = [
+                'paid_amount' => (float) $charge->paid_amount,
+                'status' => $charge->status,
+            ];
 
             $recorder = User::findOrFail($data['recorded_by']);
             $this->auditService->log($recorder, 'payment_recorded', $payment, $oldValues, $newValues);

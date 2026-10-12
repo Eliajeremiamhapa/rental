@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
+use App\Models\Tenant;
 use App\Models\User;
 use App\Services\SmsService;
 use Carbon\Carbon;
@@ -11,6 +12,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\ValidationException;
 
 class AuthController extends Controller
@@ -55,6 +57,70 @@ class AuthController extends Controller
         ]);
     }
 
+    public function register(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'name' => 'required|string|max:255',
+            'role' => ['required', Rule::in(['tenant', 'owner'])],
+            'phone' => ['required', 'string', Rule::unique('users', 'phone')],
+            'email' => ['nullable', 'email', Rule::unique('users', 'email')],
+            'password' => 'required|string|min:8|confirmed',
+            'id_number' => 'nullable|string|max:255',
+            'address' => 'nullable|string|max:255',
+            'emergency_contact' => 'nullable|string|max:255',
+        ], [
+            'phone.unique' => 'This phone number is already registered.',
+            'email.unique' => 'This email is already registered to another account.',
+        ]);
+
+        [$user, $tenantId] = DB::transaction(function () use ($validated) {
+            $user = User::create([
+                'name' => $validated['name'],
+                'phone' => $validated['phone'],
+                'email' => $validated['email'] ?? null,
+                'password' => $validated['password'],
+                'role' => $validated['role'],
+                'id_number' => $validated['id_number'] ?? null,
+                'address' => $validated['address'] ?? null,
+                'emergency_contact' => $validated['emergency_contact'] ?? null,
+                'is_active' => true,
+                'must_change_password' => false,
+            ]);
+
+            $tenantId = null;
+
+            // A tenant who signs up exists independently of any owner. The owner
+            // relationship is established later, when an owner accepts their
+            // first rental request ("one owner at a time").
+            if ($validated['role'] === 'tenant') {
+                Tenant::create([
+                    'user_id' => $user->id,
+                    'owner_id' => null,
+                    'full_name' => $validated['name'],
+                    'phone' => $validated['phone'],
+                    'email' => $validated['email'] ?? null,
+                    'id_number' => $validated['id_number'] ?? null,
+                    'address' => $validated['address'] ?? null,
+                    'status' => 'active',
+                ]);
+                $tenantId = $user->tenant->id;
+            }
+
+            return [$user, $tenantId];
+        });
+
+        $token = $user->createToken('auth-token')->plainTextToken;
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Account created successfully. Welcome!',
+            'data' => [
+                'user' => $user->fresh()->load('tenant'),
+                'token' => $token,
+            ],
+        ], 201);
+    }
+
     public function logout(Request $request): JsonResponse
     {
         $request->user()->currentAccessToken()->delete();
@@ -96,7 +162,7 @@ class AuthController extends Controller
             'created_at' => Carbon::now(),
         ]);
 
-        $message = "Your Rental Manager password reset code is: {$token}. It expires in 15 minutes. If you did not request this, please ignore this message.";
+        $message = "Your Nipangishe password reset code is: {$token}. It expires in 15 minutes. If you did not request this, please ignore this message.";
 
         $delivered = $this->sms->send($user->phone, $message);
 

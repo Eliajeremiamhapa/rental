@@ -21,6 +21,7 @@ class User extends Authenticatable
         'phone',
         'password',
         'role',
+        'previous_role',
         'id_number',
         'address',
         'emergency_contact',
@@ -74,5 +75,10 @@ class User extends Authenticatable
     public function isTenant(): bool
     {
         return $this->role === 'tenant';
+    }
+
+    public function isAdmin(): bool
+    {
+        return $this->role === 'admin';
     }
 }

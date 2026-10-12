@@ -5,6 +5,7 @@ namespace App\Http\Controllers\API;
 use App\Http\Concerns\AuthorizesOwnership;
 use App\Http\Concerns\ResolvesBrandingAssets;
 use App\Http\Controllers\Controller;
+use App\Models\OwnerSetting;
 use App\Models\Receipt;
 use App\Services\ReceiptService;
 use Illuminate\Http\JsonResponse;
@@ -61,9 +62,10 @@ class ReceiptController extends Controller
     protected function withBranding(Receipt $receipt): array
     {
         return array_merge($receipt->toArray(), [
-            'branding' => array_merge($this->brandingPayload(), [
-                'currency' => config('app.currency', 'TZS'),
-            ]),
+            'branding' => array_merge(
+                $this->brandingPayload(OwnerSetting::forOwner($receipt->house->user_id)),
+                ['currency' => config('app.currency', 'TZS')],
+            ),
         ]);
     }
 
@@ -71,10 +73,11 @@ class ReceiptController extends Controller
     {
         $this->ensureOwned($receipt);
 
-        $html = $this->receiptService->getReceiptPdf($receipt);
+        $pdf = $this->receiptService->renderPdf($receipt);
 
-        return response($html, 200)
-            ->header('Content-Type', 'text/html; charset=UTF-8')
-            ->header('Content-Disposition', "attachment; filename=\"{$receipt->receipt_number}.html\"");
+        return response($pdf, 200, [
+            'Content-Type' => 'application/pdf',
+            'Content-Disposition' => 'attachment; filename="'.$receipt->receipt_number.'.pdf"',
+        ]);
     }
 }

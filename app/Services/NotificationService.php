@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Notification;
 use App\Models\Payment;
+use App\Models\RentalRequest;
 use App\Models\RentCharge;
 use Illuminate\Database\Eloquent\Model;
 
@@ -250,6 +251,53 @@ class NotificationService
             'Payment Received',
             "{$payerName} paid {$payment->amount} for {$roomName} ({$house->name}), period {$rentPeriod}.",
             $payment,
+        );
+    }
+
+    public function notifyOwnerRentalRequestReceived(RentalRequest $request): Notification
+    {
+        $tenant = $request->tenant;
+
+        return $this->create(
+            $request->owner_id,
+            'rental_request_received',
+            'New Rental Request',
+            "{$tenant?->full_name} requested {$request->room?->name} at {$request->house?->name}.",
+            $request,
+        );
+    }
+
+    public function notifyTenantRequestAccepted(RentalRequest $request): ?Notification
+    {
+        $userId = $request->tenant?->user_id;
+        if (! $userId) {
+            return null;
+        }
+
+        return $this->create(
+            $userId,
+            'rental_request_accepted',
+            'Rental Request Accepted',
+            "Your request for {$request->room?->name} at {$request->house?->name} was accepted. The owner will send a contract for you to sign.",
+            $request,
+        );
+    }
+
+    public function notifyTenantRequestDeclined(RentalRequest $request): ?Notification
+    {
+        $userId = $request->tenant?->user_id;
+        if (! $userId) {
+            return null;
+        }
+
+        return $this->create(
+            $userId,
+            'rental_request_declined',
+            'Rental Request Declined',
+            $request->response_message
+                ? "Your request for {$request->room?->name} was declined: {$request->response_message}"
+                : "Your request for {$request->room?->name} was declined.",
+            $request,
         );
     }
 }

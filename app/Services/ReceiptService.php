@@ -2,9 +2,12 @@
 
 namespace App\Services;
 
+use App\Models\OwnerSetting;
 use App\Models\Payment;
 use App\Models\Receipt;
 use App\Models\User;
+use Dompdf\Dompdf;
+use Dompdf\Options;
 
 class ReceiptService
 {
@@ -48,14 +51,30 @@ class ReceiptService
         return sprintf('UR%04d', $nextNumber);
     }
 
-    public function getReceiptPdf(Receipt $receipt): string
+    /**
+     * Render the printable receipt as a self-contained HTML document. Used as
+     * the source for both the on-screen preview download and the PDF renderer.
+     */
+    public function getReceiptHtml(Receipt $receipt): string
     {
         $receipt->load('payment', 'tenant', 'room', 'house', 'house.owner');
 
-        $companyName = config('services.receipt.company_name', 'UVIMO');
-        $slogan = config('services.receipt.company_slogan');
-        $companyPhone = config('services.receipt.company_phone');
-        $companyAddress = config('services.receipt.company_address');
+        // Branding comes from the landlord who owns the house, so each owner's
+        // receipts carry their own name/contact. Falls back to the platform
+        // brand when the owner has not configured anything.
+        $settings = $receipt->house?->user_id
+            ? OwnerSetting::forOwner($receipt->house->user_id)
+            : null;
+        $hasOwnerBranding = (bool) $settings?->company_name;
+
+        $companyName = $hasOwnerBranding
+            ? $settings->company_name
+            : config('services.receipt.company_name', 'Nipangishe');
+        $slogan = $hasOwnerBranding ? null : config('services.receipt.company_slogan');
+        $companyPhone = $settings?->contact_phone
+            ?: config('services.receipt.company_phone');
+        $companyAddress = $settings?->address
+            ?: config('services.receipt.company_address');
         $currency = config('app.currency', 'TZS');
 
         // Everything below is user-supplied (house/room/tenant names, the
@@ -210,6 +229,29 @@ class ReceiptService
 </body>
 </html>
 HTML;
+    }
+
+    /**
+     * Render the receipt HTML into a binary PDF document (A4 portrait).
+     *
+     * Remote assets are disabled: local logo/signature files are embedded as
+     * data URIs by getReceiptHtml(), so the PDF stays self-contained and no
+     * outbound request is ever made while generating a document.
+     */
+    public function renderPdf(Receipt $receipt): string
+    {
+        $options = new Options;
+        $options->set('isRemoteEnabled', false);
+        $options->set('isHtml5ParserEnabled', true);
+        $options->set('defaultFont', 'DejaVu Sans');
+        $options->set('chroot', base_path());
+
+        $dompdf = new Dompdf($options);
+        $dompdf->loadHtml($this->getReceiptHtml($receipt), 'UTF-8');
+        $dompdf->setPaper('A4', 'portrait');
+        $dompdf->render();
+
+        return $dompdf->output();
     }
 
     /**

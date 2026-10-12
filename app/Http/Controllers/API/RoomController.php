@@ -50,6 +50,7 @@ class RoomController extends Controller
 
         $room->load([
             'house',
+            'media',
             'currentRental' => function ($q) {
                 $q->with('tenant');
             },
@@ -83,7 +84,7 @@ class RoomController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Room created successfully.',
-            'data' => $room->load('house'),
+            'data' => $room->load(['house', 'media']),
         ], 201);
     }
 
@@ -102,7 +103,7 @@ class RoomController extends Controller
         return response()->json([
             'success' => true,
             'message' => 'Room updated successfully.',
-            'data' => $room->fresh()->load('house'),
+            'data' => $room->fresh()->load(['house', 'media']),
         ]);
     }
 

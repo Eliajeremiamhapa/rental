@@ -9,6 +9,7 @@ use App\Models\ContractEvent;
 use App\Models\OwnerSetting;
 use App\Models\User;
 use App\Services\ContractContentBuilder;
+use App\Services\RentChargeService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -34,7 +35,10 @@ class ContractSignController extends Controller
      */
     public const CONSENT_VERSION = '1.0';
 
-    public function __construct(private readonly ContractContentBuilder $builder) {}
+    public function __construct(
+        private readonly ContractContentBuilder $builder,
+        private readonly RentChargeService $charges,
+    ) {}
 
     /**
      * Read the contract. First view flips the status so the owner can see that
@@ -93,7 +97,7 @@ class ContractSignController extends Controller
                     'contract_number' => $contract->contract_number,
                     'tenant_name' => $contract->tenant?->full_name,
                     'tenant_phone' => $contract->tenant?->phone,
-                    'company_name' => $snapshot['company_name'] ?? config('services.receipt.company_name'),
+                    'company_name' => $snapshot['company_name'] ?? config('services.receipt.company_name', 'Nipangishe'),
                 ],
                 'snapshot' => $snapshot,
                 // The tenant signs against this value. If the server later
@@ -102,7 +106,7 @@ class ContractSignController extends Controller
                 // The exact sentence the tenant is about to accept.
                 'consent_statement' => $this->consentStatement($contract, (string) $contract->tenant?->full_name),
                 'consent_version' => self::CONSENT_VERSION,
-                'branding' => $this->brandingPayload(),
+                'branding' => $this->brandingPayload(OwnerSetting::forOwner($contract->owner_id)),
             ],
         ]);
     }
@@ -179,6 +183,10 @@ class ContractSignController extends Controller
                 'signature_token' => null,
             ]);
 
+            // The tenancy only becomes live with rent charges once the tenant
+            // signs, so nobody can pay for a room they never signed for.
+            $contract->rental?->activateAfterSigning($this->charges);
+
             $this->recordEvent($contract, 'signed', 'tenant', $validated['signer_name'], $request, [
                 'sha256' => $contract->document_sha256,
             ]);
@@ -217,6 +225,9 @@ class ContractSignController extends Controller
             'declined_at' => now(),
             'signature_token' => null,
         ]);
+
+        // A tenancy that never started must give the room back to the market.
+        $contract->rental?->releaseIfUnstarted('Contract was declined by tenant.');
 
         $this->recordEvent($contract, 'declined', 'tenant', $contract->tenant?->full_name, $request, [
             'reason' => $validated['reason'] ?? null,
@@ -264,7 +275,7 @@ class ContractSignController extends Controller
             'consented_at' => $contract->signer_consented_at?->toIso8601String(),
             'signed_at' => $contract->signed_at?->toIso8601String(),
             'document_sha256' => $contract->document_sha256,
-            'branding' => $this->brandingPayload(),
+            'branding' => $this->brandingPayload(OwnerSetting::forOwner($contract->owner_id)),
             'verification_note' => 'Mkatataba huu umesainiwa kwa umuhimu wa elektroniki. '
                 .'Uthibitisho: SHA-256 '.substr((string) $contract->document_sha256, 0, 16).'.',
         ];

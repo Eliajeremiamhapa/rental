@@ -189,6 +189,100 @@ class ReportServiceTest extends TestCase
         $this->assertSame($room->id, $rental->room_id);
     }
 
+    public function test_room_occupancy_counts_historical_tenancies(): void
+    {
+        // A past tenancy that has since ended must still count toward the room's
+        // occupancy; a report that looked only at today's live rental would miss
+        // the three months of the finished tenancy.
+        $room = Room::factory()->forHouse($this->house)->create(['rent_amount' => 90000]);
+        $pastTenant = Tenant::factory()->forUser(
+            User::factory()->tenant()->create(['must_change_password' => false])
+        )->create(['owner_id' => $this->owner->id, 'full_name' => 'Asha Omar']);
+
+        Rental::create([
+            'tenant_id' => $pastTenant->id,
+            'room_id' => $room->id,
+            'house_id' => $this->house->id,
+            'rent_amount' => 90000,
+            'period_months' => 3,
+            'start_date' => now()->subMonths(6)->startOfMonth()->toDateString(),
+            'end_date' => now()->subMonths(4)->endOfMonth()->toDateString(),
+            'due_day' => 5,
+            'status' => 'expired',
+        ]);
+
+        Rental::create([
+            'tenant_id' => $this->tenant->id,
+            'room_id' => $room->id,
+            'house_id' => $this->house->id,
+            'rent_amount' => 90000,
+            'period_months' => 12,
+            'start_date' => now()->subMonths(3)->startOfMonth()->toDateString(),
+            'end_date' => now()->addYear()->endOfYear()->toDateString(),
+            'due_day' => 5,
+            'status' => 'active',
+        ]);
+
+        $row = $this->service()->roomReport(
+            $room->id,
+            now()->subMonths(6)->startOfMonth()->toDateString(),
+            now()->endOfMonth()->toDateString(),
+        )->first();
+
+        $this->assertSame(7, $row['total_months']);
+        $this->assertSame(7, $row['occupied_months']);
+        $this->assertSame(100.0, $row['occupancy_rate']);
+    }
+
+    public function test_room_occupancy_respects_the_date_window(): void
+    {
+        // Two months back the room was empty: the setUp tenancy starts this
+        // month, so an empty month must read 0%, not the room's lifetime rate.
+        $empty = $this->service()->roomReport(
+            $this->room->id,
+            now()->subMonths(2)->startOfMonth()->toDateString(),
+            now()->subMonths(2)->endOfMonth()->toDateString(),
+        )->first();
+
+        $this->assertSame(1, $empty['total_months']);
+        $this->assertSame(0, $empty['occupied_months']);
+        $this->assertSame(0.0, $empty['occupancy_rate']);
+
+        // The current month is covered by the setUp tenancy.
+        $tenanted = $this->service()->roomReport(
+            $this->room->id,
+            now()->startOfMonth()->toDateString(),
+            now()->endOfMonth()->toDateString(),
+        )->first();
+
+        $this->assertSame(1, $tenanted['total_months']);
+        $this->assertSame(1, $tenanted['occupied_months']);
+        $this->assertSame(100.0, $tenanted['occupancy_rate']);
+    }
+
+    public function test_future_start_rental_does_not_inflate_occupancy(): void
+    {
+        $room = Room::factory()->forHouse($this->house)->create();
+
+        Rental::create([
+            'tenant_id' => $this->tenant->id,
+            'room_id' => $room->id,
+            'house_id' => $this->house->id,
+            'rent_amount' => 160000,
+            'period_months' => 6,
+            'start_date' => now()->addMonths(2)->startOfMonth()->toDateString(),
+            'end_date' => now()->addMonths(7)->endOfMonth()->toDateString(),
+            'due_day' => 5,
+            'status' => 'active',
+        ]);
+
+        $row = $this->service()->roomReport($room->id)->first();
+
+        $this->assertSame(0, $row['occupied_months']);
+        $this->assertSame(0.0, $row['occupancy_rate']);
+        $this->assertLessThanOrEqual($row['total_months'], $row['occupied_months']);
+    }
+
     public function test_rent_collection_date_range_includes_periods_that_overlap_it(): void
     {
         // A tenancy running 15 Aug - 14 Sep genuinely overlaps 10-20 Sep.

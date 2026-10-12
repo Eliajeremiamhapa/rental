@@ -54,7 +54,7 @@ class TenantContractController extends Controller
             'data' => array_merge($this->summarise($contract), [
                 'description' => $contract->description,
                 'snapshot' => $this->snapshotFor($contract),
-                'branding' => $this->brandingPayload(),
+                'branding' => $this->brandingPayload(OwnerSetting::forOwner($contract->owner_id)),
                 'signature_image' => $contract->signature_image,
                 'document_sha256' => $contract->document_sha256,
                 // Proof of what was accepted, shown next to the signed copy.

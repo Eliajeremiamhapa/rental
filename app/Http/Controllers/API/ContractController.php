@@ -151,7 +151,7 @@ class ContractController extends Controller
             'data' => [
                 'snapshot' => $snapshot,
                 'fingerprint' => $this->builder->fingerprint($snapshot),
-                'branding' => $this->brandingPayload(),
+                'branding' => $this->brandingPayload(OwnerSetting::forOwner($request->user())),
                 'warnings' => $validation['warnings'],
             ],
         ]);
@@ -206,7 +206,7 @@ class ContractController extends Controller
                 'daily_rate' => $this->builder->dailyRate($validated['rent_amount']),
                 'period_months' => $validated['period_months'],
                 'notice_months' => $validated['notice_months'] ?? null,
-                'notice_per_day' => $validated['notice_per_day'] ?? 0,
+                'notice_per_day' => $this->builder->dailyRate((float) $validated['rent_amount']),
                 'service_fee' => $validated['service_fee'] ?? 0,
                 'due_day' => $validated['due_day'] ?? 25,
                 'payment_commitment_months' => $validated['payment_commitment_months'] ?? null,
@@ -285,7 +285,6 @@ class ContractController extends Controller
             'end_date' => $validated['end_date'] ?? null,
             'due_day' => $validated['due_day'] ?? null,
             'notice_months' => $validated['notice_months'] ?? null,
-            'notice_per_day' => $validated['notice_per_day'] ?? null,
             'service_fee' => $validated['service_fee'] ?? null,
             'payment_commitment_months' => $validated['payment_commitment_months'] ?? null,
             'short_commitment_months' => $validated['short_commitment_months'] ?? null,
@@ -295,6 +294,7 @@ class ContractController extends Controller
         // Figures are always recalculated from the inputs, never accepted.
         $contract->total_amount = $this->builder->totalFor($rent, $months);
         $contract->daily_rate = $this->builder->dailyRate($rent);
+        $contract->notice_per_day = $this->builder->dailyRate($rent);
         $contract->save();
 
         $this->recordEvent($contract, 'updated', 'owner', $request->user()->name, $request);
@@ -416,6 +416,9 @@ class ContractController extends Controller
             'signature_token' => null,
         ]);
 
+        // A tenancy that never started must give the room back to the market.
+        $contract->rental?->releaseIfUnstarted($validated['voided_reason'] ?? 'Contract voided.');
+
         $this->recordEvent($contract, 'voided', 'owner', $request->user()->name, $request);
 
         return response()->json([
@@ -464,7 +467,6 @@ class ContractController extends Controller
             'end_date' => $required.'|date',
             'due_day' => 'nullable|integer|min:1|max:31',
             'notice_months' => 'nullable|integer|min:0|max:12',
-            'notice_per_day' => 'nullable|numeric|min:0',
             'service_fee' => 'nullable|numeric|min:0',
             'payment_commitment_months' => 'nullable|integer|min:0|max:120',
             'short_commitment_months' => 'nullable|integer|min:0|max:120',
@@ -580,7 +582,7 @@ class ContractController extends Controller
             'extra_clauses' => $contract->extra_clauses ?? [],
             'standard_clauses' => ContractTemplate::standardText(),
             'snapshot' => $snapshot,
-            'branding' => $this->brandingPayload(),
+            'branding' => $this->brandingPayload(OwnerSetting::forOwner($contract->owner_id)),
             'fingerprint' => $contract->document_sha256 ?: $this->builder->fingerprint($snapshot),
             'signing_url' => $contract->signature_token
                 ? url("/contracts/sign/{$contract->signature_token}")

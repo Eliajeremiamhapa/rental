@@ -11,7 +11,7 @@ return new class extends Migration
         Schema::create('owner_settings', function (Blueprint $table) {
             $table->id();
             $table->foreignId('user_id')->unique()->constrained()->cascadeOnDelete();
-            $table->string('company_name')->default('UVIMO');
+            $table->string('company_name')->default('Nipangishe');
             $table->string('contact_phone')->nullable();
             $table->string('contact_email')->nullable();
             $table->string('address')->nullable();

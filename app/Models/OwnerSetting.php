@@ -35,17 +35,21 @@ class OwnerSetting extends Model
     }
 
     /**
-     * Settings are optional: a brand-new owner with no row still gets the
-     * template defaults rather than a broken letter.
+     * Settings are optional: a brand-new owner with no row still gets sensible
+     * defaults rather than a broken letter. The company name defaults to the
+     * owner's own account name so their documents are never stamped with the
+     * platform brand by accident.
      */
     public static function forOwner(User|int $owner): self
     {
-        $userId = $owner instanceof User ? $owner->id : $owner;
+        $user = $owner instanceof User ? $owner : User::find($owner);
+        $userId = $user?->id ?? ($owner instanceof User ? $owner->id : $owner);
 
         return static::firstOrCreate(
             ['user_id' => $userId],
             [
-                'company_name' => config('services.receipt.company_name', 'UVIMO'),
+                'company_name' => $user?->name
+                    ?: config('services.receipt.company_name', 'Nipangishe'),
                 'currency' => config('app.currency', 'TZS'),
                 'payment_accounts' => [],
             ],

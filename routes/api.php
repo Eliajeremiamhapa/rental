@@ -1,16 +1,20 @@
 <?php
 
+use App\Http\Controllers\API\Admin\UserController as AdminUserController;
 use App\Http\Controllers\API\AssignmentController;
 use App\Http\Controllers\API\AuthController;
 use App\Http\Controllers\API\ContractController;
 use App\Http\Controllers\API\ContractSignController;
 use App\Http\Controllers\API\DashboardController;
 use App\Http\Controllers\API\HouseController;
+use App\Http\Controllers\API\ListingController;
+use App\Http\Controllers\API\MediaController;
 use App\Http\Controllers\API\NotificationController;
 use App\Http\Controllers\API\PaymentController;
 use App\Http\Controllers\API\ProfileController;
 use App\Http\Controllers\API\ReceiptController;
 use App\Http\Controllers\API\RentalController;
+use App\Http\Controllers\API\RentalRequestController;
 use App\Http\Controllers\API\RentChargeController;
 use App\Http\Controllers\API\ReportController;
 use App\Http\Controllers\API\RoomController;
@@ -19,11 +23,16 @@ use App\Http\Controllers\API\TenantContractController;
 use App\Http\Controllers\API\TenantController;
 use Illuminate\Support\Facades\Route;
 
-// Accounts are owner-managed: owners are provisioned by the seeder/administrator
-// and tenants are created by their owner, so there is no public sign-up.
 Route::post('/login', [AuthController::class, 'login'])->middleware('throttle:6,1');
+Route::post('/register', [AuthController::class, 'register'])->middleware('throttle:6,1');
 Route::post('/forgot-password', [AuthController::class, 'forgotPassword'])->middleware('throttle:3,1');
 Route::post('/reset-password', [AuthController::class, 'resetPassword'])->middleware('throttle:6,1');
+
+// Public marketplace: active houses and their available rooms, no login.
+Route::middleware('throttle:60,1')->prefix('listings')->group(function () {
+    Route::get('/houses', [ListingController::class, 'houses']);
+    Route::get('/houses/{house}', [ListingController::class, 'house']);
+});
 
 // Tenant signing. No login: the tenant receives a single link and must be able
 // to sign without an account. The token is the credential, so every endpoint
@@ -37,10 +46,23 @@ Route::middleware('throttle:20,1')->prefix('contracts/sign')->group(function () 
 Route::middleware(['auth:sanctum', 'role:owner', 'owner.active', 'password.change'])->prefix('owner')->group(function () {
     Route::get('/dashboard', [DashboardController::class, 'owner']);
 
+    // Rental requests from self-registered tenants.
+    Route::get('/rental-requests', [RentalRequestController::class, 'ownerIndex']);
+    Route::get('/rental-requests/{rentalRequest}', [RentalRequestController::class, 'ownerShow']);
+    Route::post('/rental-requests/{rentalRequest}/accept', [RentalRequestController::class, 'accept']);
+    Route::post('/rental-requests/{rentalRequest}/decline', [RentalRequestController::class, 'decline']);
+
     Route::apiResource('houses', HouseController::class);
     Route::get('/houses/{house}/rooms', [HouseController::class, 'rooms']);
     Route::post('/houses/{house}/rooms', [RoomController::class, 'store']);
     Route::get('/houses/{house}/summary', [HouseController::class, 'summary']);
+
+    // Listing media: images and video for houses/rooms. Uploads land on the
+    // public disk; videos may also be an external embed link.
+    Route::post('/houses/{house}/media', [MediaController::class, 'storeForHouse']);
+    Route::post('/rooms/{room}/media', [MediaController::class, 'storeForRoom']);
+    Route::put('/media/{media}', [MediaController::class, 'update']);
+    Route::delete('/media/{media}', [MediaController::class, 'destroy']);
 
     Route::apiResource('tenants', TenantController::class);
     Route::post('/tenants/{tenant}/reset-password', [TenantController::class, 'resetPassword']);
@@ -79,7 +101,19 @@ Route::middleware(['auth:sanctum', 'role:owner', 'owner.active', 'password.chang
     Route::get('/search/payments', [SearchController::class, 'payments']);
 });
 
-Route::middleware(['auth:sanctum', 'password.change'])->group(function () {
+// System administrator. User management, suspension and admin-role control;
+// owner/tenant accounts are provisioned normally and are never self-assigned.
+Route::middleware(['auth:sanctum', 'role:admin', 'active', 'password.change'])->prefix('admin')->group(function () {
+    Route::get('/users', [AdminUserController::class, 'index']);
+    Route::get('/users/{user}', [AdminUserController::class, 'show']);
+    Route::post('/users/{user}/suspend', [AdminUserController::class, 'suspend']);
+    Route::post('/users/{user}/activate', [AdminUserController::class, 'activate']);
+    Route::post('/users/{user}/grant-admin', [AdminUserController::class, 'grantAdmin']);
+    Route::post('/users/{user}/revoke-admin', [AdminUserController::class, 'revokeAdmin']);
+    Route::post('/users/{user}/reset-password', [AdminUserController::class, 'resetPassword']);
+});
+
+Route::middleware(['auth:sanctum', 'active', 'password.change'])->group(function () {
     Route::get('/profile', [ProfileController::class, 'show']);
     Route::put('/profile', [ProfileController::class, 'update']);
     Route::put('/profile/password', [ProfileController::class, 'updatePassword']);
@@ -121,6 +155,9 @@ Route::middleware(['auth:sanctum', 'password.change'])->group(function () {
     // The tenant's own view of their contracts, backing "My Contracts". Scoped
     // by the signed-in tenant, so no tenant can read another's tenancy terms.
     Route::middleware('role:tenant')->group(function () {
+        Route::get('/rental-requests', [RentalRequestController::class, 'tenantIndex']);
+        Route::post('/rental-requests', [RentalRequestController::class, 'store']);
+
         Route::get('/contracts', [TenantContractController::class, 'index']);
         Route::get('/contracts/{id}', [TenantContractController::class, 'show'])->where('id', '[0-9]+');
     });

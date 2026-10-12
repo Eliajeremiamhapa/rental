@@ -4,9 +4,9 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Models\Rental;
-use App\Models\RentCharge;
 use App\Models\Room;
 use App\Models\Tenant;
+use App\Services\RentChargeService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -14,6 +14,10 @@ use Illuminate\Support\Facades\DB;
 
 class AssignmentController extends Controller
 {
+    public function __construct(
+        protected RentChargeService $rentChargeService,
+    ) {}
+
     public function store(Request $request): JsonResponse
     {
         $validated = $request->validate([
@@ -65,28 +69,7 @@ class AssignmentController extends Controller
                 'status' => 'active',
             ]);
 
-            $periodStart = $startDate->copy()->startOfMonth();
-            $periodEnd = $periodStart->copy()->endOfMonth();
-            if ($periodEnd->gt($endDate)) {
-                $periodEnd = $endDate->copy();
-            }
-
-            $chargeDueDate = $periodStart->copy()->day($dueDay);
-            if ($chargeDueDate->lt($periodStart)) {
-                $chargeDueDate->addMonth();
-            }
-
-            RentCharge::create([
-                'rental_id' => $rental->id,
-                'tenant_id' => $tenant->id,
-                'room_id' => $room->id,
-                'period_start' => $periodStart->toDateString(),
-                'period_end' => $periodEnd->toDateString(),
-                'due_date' => $chargeDueDate->toDateString(),
-                'expected_amount' => $validated['rent_amount'],
-                'paid_amount' => 0,
-                'status' => 'unpaid',
-            ]);
+            $this->rentChargeService->generateChargesForRental($rental);
 
             $room->update(['status' => 'occupied']);
 

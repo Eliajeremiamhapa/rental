@@ -10,67 +10,102 @@ use Illuminate\Support\Collection;
 
 class RentChargeService
 {
+    /**
+     * The deterministic list of monthly installments a rental is billed for.
+     *
+     * Periods are anchored to the rental start day (e.g. a tenancy starting on
+     * the 10th bills 10th -> 9th), so a N-month rental yields exactly N charges
+     * regardless of whether the start date falls mid-month. Walking calendar
+     * months instead produced N+1 full-price charges for mid-month starts and
+     * overlapping duplicates once the recurring job also ran.
+     *
+     * @return array<int, array{period_start: Carbon, period_end: Carbon, due_date: Carbon}>
+     */
+    public function expectedPeriods(Rental $rental): array
+    {
+        $anchor = Carbon::parse($rental->start_date)->startOfDay();
+        $months = max(1, (int) $rental->period_months);
+        $end = $rental->end_date ? Carbon::parse($rental->end_date)->startOfDay() : null;
+
+        $periods = [];
+
+        for ($k = 0; $k < $months; $k++) {
+            $periodStart = $anchor->copy()->addMonthsNoOverflow($k);
+            $periodEnd = $anchor->copy()->addMonthsNoOverflow($k + 1)->subDay();
+
+            if ($end && $periodEnd->gt($end)) {
+                $periodEnd = $end->copy();
+            }
+            if ($end && $periodStart->gt($end)) {
+                break;
+            }
+
+            $dueDate = $periodStart->copy()->day($rental->due_day);
+            if ($dueDate->lt($periodStart)) {
+                $dueDate->addMonth();
+            }
+
+            $periods[] = [
+                'period_start' => $periodStart,
+                'period_end' => $periodEnd,
+                'due_date' => $dueDate,
+            ];
+        }
+
+        return $periods;
+    }
+
     public function generateChargesForRental(Rental $rental): Collection
     {
         $charges = collect();
-        $start = Carbon::parse($rental->start_date);
-        $end = $rental->end_date ? Carbon::parse($rental->end_date) : $start->copy()->addMonths($rental->period_months);
 
-        while ($start->lte($end)) {
-            $periodEnd = $start->copy()->endOfMonth();
-            if ($periodEnd->gt($end)) {
-                $periodEnd = $end->copy();
-            }
-
+        foreach ($this->expectedPeriods($rental) as $period) {
             $existing = RentCharge::where('rental_id', $rental->id)
-                ->where('period_start', $start->toDateString())
+                ->whereDate('period_start', $period['period_start']->toDateString())
                 ->first();
 
             if (! $existing) {
-                $charges->push($this->generateChargeForPeriod($rental, $start->copy(), $periodEnd));
+                $charges->push($this->generateChargeForPeriod(
+                    $rental,
+                    $period['period_start']->copy(),
+                    $period['period_end']->copy(),
+                ));
             }
-
-            $start = $start->copy()->addMonth()->startOfMonth();
         }
 
         return $charges;
     }
 
     /**
-     * Generate monthly charges for the upcoming $lookaheadMonths months of an active rental,
-     * skipping any period that already has a charge. Does not extend beyond the rental end date.
+     * Generate the upcoming installments of an active rental, skipping any
+     * period that already has a charge. Because periods come from the same
+     * anchor as generateChargesForRental, this can never create an overlapping
+     * duplicate for a mid-month start.
      */
     public function generateRecurringCharges(Rental $rental, int $lookaheadMonths = 6): Collection
     {
         $charges = collect();
-        $end = $rental->end_date ? Carbon::parse($rental->end_date) : Carbon::parse($rental->start_date)->addMonths($rental->period_months);
+        $windowStart = now()->startOfMonth();
+        $windowEnd = now()->copy()->addMonths($lookaheadMonths)->endOfMonth();
 
-        $start = now()->startOfMonth();
-        $limit = now()->copy()->addMonths($lookaheadMonths)->startOfMonth();
+        foreach ($this->expectedPeriods($rental) as $period) {
+            $periodStart = $period['period_start'];
 
-        // Walk month by month from today's month forward.
-        while ($start->lte($limit)) {
-            $periodStart = $start->copy();
-            $periodEnd = $start->copy()->endOfMonth();
-
-            if ($periodStart->gt($end)) {
-                break;
+            if ($periodStart->lt($windowStart) || $periodStart->gt($windowEnd)) {
+                continue;
             }
-            if ($periodEnd->gt($end)) {
-                $periodEnd = $end->copy();
-            }
-
-            $periodStartKey = $periodStart->toDateString();
 
             $existing = RentCharge::where('rental_id', $rental->id)
-                ->where('period_start', $periodStartKey)
+                ->whereDate('period_start', $periodStart->toDateString())
                 ->first();
 
-            if (! $existing && $periodStartKey >= now()->startOfMonth()->toDateString()) {
-                $charges->push($this->generateChargeForPeriod($rental, $periodStart, $periodEnd));
+            if (! $existing) {
+                $charges->push($this->generateChargeForPeriod(
+                    $rental,
+                    $periodStart->copy(),
+                    $period['period_end']->copy(),
+                ));
             }
-
-            $start = $start->copy()->addMonth();
         }
 
         return $charges;
@@ -95,25 +130,77 @@ class RentChargeService
             'status' => 'unpaid',
         ]);
 
-        // Absorb any credit left on the immediately-preceding charge (an overpayment
-        // that had no later charge at the time it was received) into this period.
-        $previous = RentCharge::query()
-            ->where('rental_id', $rental->id)
-            ->where('period_start', '<', $periodStart->toDateString())
-            ->orderByDesc('period_start')
-            ->first();
+        // An overpayment may already sit on an earlier period as credit (it had
+        // no later charge to fall into when it arrived). Re-spread the rental's
+        // money so this new period is settled automatically.
+        $this->reallocateCredit($rental);
 
-        if ($previous) {
-            $credit = (float) $previous->paid_amount - (float) $previous->expected_amount;
-            if ($credit > 0) {
-                $previous->update(['paid_amount' => (float) $previous->expected_amount]);
-                $this->updateChargeStatus($previous->fresh());
-                $charge->update(['paid_amount' => $credit]);
-                $charge = $this->updateChargeStatus($charge->fresh());
-            }
+        return $charge->fresh();
+    }
+
+    /**
+     * Re-spread every payment recorded on a rental across its charges, oldest
+     * debt first.
+     *
+     * A payment is stored against the one charge the payer targeted, but the
+     * money belongs to the tenancy as a whole. Without this a lump sum aimed at
+     * a later period leaves an earlier period unpaid, and an overpayment stays
+     * as credit on a single charge that the following period can never reach.
+     * Recomputing the distribution from the total received keeps every charge's
+     * paid amount and status consistent with the ledger.
+     */
+    public function reallocateCredit(Rental|int $rental): void
+    {
+        $rentalId = $rental instanceof Rental ? $rental->id : $rental;
+
+        $charges = RentCharge::query()
+            ->where('rental_id', $rentalId)
+            ->orderBy('period_start')
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get();
+
+        if ($charges->isEmpty()) {
+            return;
         }
 
-        return $charge;
+        $pool = (float) $charges->sum(fn (RentCharge $charge) => (float) $charge->paid_amount);
+
+        foreach ($charges as $charge) {
+            $expected = (float) $charge->expected_amount;
+            $applied = max(0.0, min($pool, $expected));
+            $pool -= $applied;
+
+            // Setting the attribute marks it dirty so updateChargeStatus()'s
+            // save() persists it alongside the recalculated status.
+            $charge->paid_amount = $applied;
+            $this->updateChargeStatus($charge);
+            $this->markOverdueIfPastDue($charge->fresh());
+        }
+
+        // Money beyond every period stays on the newest charge as credit so the
+        // next generated period absorbs it.
+        if ($pool > 0) {
+            $last = $charges->last();
+            $last->paid_amount = (float) $last->paid_amount + $pool;
+            $this->updateChargeStatus($last);
+        }
+    }
+
+    /**
+     * Keep a charge flagged overdue when it is still not fully settled and its
+     * due date has passed. updateChargeStatus() only knows unpaid/partial/paid,
+     * so reallocation must re-assert the overdue flag rather than demote it.
+     */
+    private function markOverdueIfPastDue(RentCharge $charge): void
+    {
+        if (
+            in_array($charge->status, ['unpaid', 'partial'], true)
+            && $charge->due_date
+            && $charge->due_date->lt(now()->startOfDay())
+        ) {
+            $charge->update(['status' => 'overdue']);
+        }
     }
 
     public function updateChargeStatus(RentCharge $charge): RentCharge

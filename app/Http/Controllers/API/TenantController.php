@@ -325,7 +325,7 @@ class TenantController extends Controller
         }
 
         try {
-            $message = "Dear {$fullName}, welcome to Rental Manager. Your temporary login password is: {$temporaryPassword}. Sign in with your phone number and change it after your first login.";
+            $message = "Dear {$fullName}, welcome to Nipangishe. Your temporary login password is: {$temporaryPassword}. Sign in with your phone number and change it after your first login.";
 
             return $this->sms->send($phone, $message);
         } catch (\Throwable $e) {

@@ -68,7 +68,7 @@ class HouseController extends Controller
     {
         $this->ensureOwned($house);
 
-        $house->load(['rooms' => function ($q) {
+        $house->load(['media', 'rooms' => function ($q) {
             $q->withCount('rentals');
         }]);
 

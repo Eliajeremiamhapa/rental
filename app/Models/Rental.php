@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Models\Concerns\OwnedByUser;
+use App\Services\RentChargeService;
 use Database\Factories\RentalFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -111,5 +112,42 @@ class Rental extends Model
     public function scopeLive(Builder $query): Builder
     {
         return $query->whereIn('status', self::LIVE_STATUSES);
+    }
+
+    /**
+     * A request-driven tenancy becomes billable only once its contract is
+     * signed. This is the single gateway that moves it to "active", marks the
+     * room occupied, and generates the monthly rent charges. Nothing before
+     * this point ever creates charges, so a tenant cannot pay before signing.
+     */
+    public function activateAfterSigning(RentChargeService $charges): void
+    {
+        if ($this->status !== 'pending') {
+            return;
+        }
+
+        $this->update(['status' => 'active']);
+        $this->room?->update(['status' => 'occupied']);
+
+        $charges->generateChargesForRental($this);
+    }
+
+    /**
+     * If a never-started tenancy is voided or its contract is declined, release
+     * the room back to "available" so another tenant can request it.
+     */
+    public function releaseIfUnstarted(?string $reason = null): void
+    {
+        if ($this->status !== 'pending') {
+            return;
+        }
+
+        $this->update([
+            'status' => 'terminated',
+            'terminated_at' => now(),
+            'terminated_reason' => $reason ?: 'Contract was not signed.',
+        ]);
+
+        $this->room?->update(['status' => 'available']);
     }
 }

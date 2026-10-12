@@ -46,6 +46,16 @@ class UserFactory extends Factory
         return $this->state(fn () => ['role' => 'tenant']);
     }
 
+    public function admin(): static
+    {
+        return $this->state(fn () => ['role' => 'admin']);
+    }
+
+    public function suspended(): static
+    {
+        return $this->state(fn () => ['is_active' => false]);
+    }
+
     /**
      * Indicate that the model's email address should be unverified.
      */

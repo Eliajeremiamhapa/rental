@@ -44,11 +44,11 @@ return [
     ],
 
     'receipt' => [
-        // Branding printed on every receipt. The logo and signature accept an
-        // absolute path, a path inside public/, a path inside storage/app/,
-        // or a full URL. Local files are embedded so downloads stay offline-safe.
-        'company_name' => env('RECEIPT_COMPANY_NAME', 'UVIMO'),
-        'company_slogan' => env('RECEIPT_COMPANY_SLOGAN', ''),
+        // Platform-level fallback branding. Each landlord can still override the
+        // name/contact from their own settings; this is the default shown on the
+        // public site and on documents when no owner branding is available.
+        'company_name' => env('RECEIPT_COMPANY_NAME', 'Nipangishe'),
+        'company_slogan' => env('RECEIPT_COMPANY_SLOGAN', 'Makazi yako, hatua moja karibu'),
         'company_phone' => env('RECEIPT_COMPANY_PHONE', ''),
         'company_address' => env('RECEIPT_COMPANY_ADDRESS', ''),
         'logo_path' => env('RECEIPT_LOGO_PATH', 'branding/logo.png'),

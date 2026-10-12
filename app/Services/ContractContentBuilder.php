@@ -57,7 +57,7 @@ class ContractContentBuilder
             'end_date' => $rental->end_date?->toDateString(),
             'deposit_amount' => (float) ($rental->deposit_amount ?? 0),
             'due_day' => (int) ($rental->due_day ?: 25),
-            'notice_per_day' => 2000,
+            'notice_per_day' => $this->dailyRate((float) $rental->rent_amount),
             'service_fee' => 0,
             'payment_commitment_months' => 5,
             'short_commitment_months' => 3,
@@ -141,7 +141,9 @@ class ContractContentBuilder
         }
 
         $accounts = $input['payment_accounts'] ?? [];
-        if (is_array($accounts) && $accounts !== []) {
+        $hasAccounts = is_array($accounts) && $accounts !== [];
+
+        if ($hasAccounts) {
             foreach ($accounts as $account) {
                 $number = trim((string) Arr::get((array) $account, 'number', ''));
                 if ($number === '') {
@@ -153,7 +155,13 @@ class ContractContentBuilder
                     $warnings[] = "Namba ya akaunti ya malipo \"{$number}\" inaonekana kuwa si sahihi.";
                 }
             }
-        } else {
+        }
+
+        // A single Lipa Namba is enough for tenants to pay; only warn when the
+        // owner has provided neither payment accounts nor a Lipa Namba.
+        $hasLipaNamba = trim((string) ($input['lipa_namba'] ?? '')) !== '';
+
+        if (! $hasAccounts && ! $hasLipaNamba) {
             $warnings[] = 'Hakuna akaunti za malipo zilizowekwa. Mpangaji atatuma malipo kwa namba nyingine ambayo hatutowajibika.';
         }
 
@@ -172,8 +180,12 @@ class ContractContentBuilder
         $months = max(1, (int) ($input['period_months'] ?? 1));
         $total = $this->totalFor($rent, $months);
         $daily = $this->dailyRate($rent);
+        // The overstay charge is the daily rent. Stored contracts supply their
+        // own frozen value through currentInput(); fresh/preview inputs fall
+        // back to the derived rate so it can never disagree with the monthly rent.
+        $noticePerDay = (float) ($input['notice_per_day'] ?? $daily);
         $currency = (string) (($input['currency'] ?? null) ?: 'TZS');
-        $company = (string) (($input['company_name'] ?? null) ?: config('services.receipt.company_name', 'UVIMO'));
+        $company = (string) (($input['company_name'] ?? null) ?: config('services.receipt.company_name', 'Nipangishe'));
         $accounts = (array) ($input['payment_accounts'] ?? []);
         $lipaNamba = trim((string) ($input['lipa_namba'] ?? '')) ?: null;
         $lipaNambaName = trim((string) ($input['lipa_namba_name'] ?? '')) ?: null;
@@ -189,7 +201,7 @@ class ContractContentBuilder
             'company_name' => $company,
             'contact_phone' => (string) ($input['contact_phone'] ?? ''),
             'currency' => $currency,
-            'notice_per_day' => static::money((float) ($input['notice_per_day'] ?? 0)),
+            'notice_per_day' => static::money($noticePerDay),
             'due_day' => (string) (int) ($input['due_day'] ?? 25),
             'payment_commitment_months' => (string) (int) ($input['payment_commitment_months'] ?? 5),
             'short_commitment_months' => (string) (int) ($input['short_commitment_months'] ?? 3),
@@ -263,7 +275,7 @@ class ContractContentBuilder
                 'period_months' => $months,
                 'deposit_amount' => (float) ($input['deposit_amount'] ?? 0),
                 'service_fee' => (float) ($input['service_fee'] ?? 0),
-                'notice_per_day' => (float) ($input['notice_per_day'] ?? 0),
+                'notice_per_day' => $noticePerDay,
                 'due_day' => (int) ($input['due_day'] ?? 25),
             ],
             'start_date' => static::formatDate($input['start_date'] ?? null),

@@ -175,26 +175,8 @@ class ReportService
         return $rooms->get()->map(function (Room $room) use ($fromDate, $toDate) {
             $charges = RentCharge::where('room_id', $room->id);
             $this->applyChargeWindow($charges, $fromDate, $toDate);
-            $charges = $charges->get();
 
-            $revenue = (float) $charges->sum('paid_amount');
-            $rented = $room->rentals->first(fn ($r) => in_array($r->status, Rental::LIVE_STATUSES, true));
-
-            // Occupancy is measured over time that has actually passed, so a
-            // tenancy running to next year does not count as occupied for all
-            // of next year. A room can never be occupied for longer than it has
-            // existed, which is what pushed the rate above 100% before.
-            $occupiedMonths = 0;
-            if ($rented?->start_date) {
-                $start = Carbon::parse($rented->start_date);
-                $end = Carbon::parse($rented->end_date ?? Carbon::now()->toDateString());
-                $elapsed = $end->lt(Carbon::now()) ? $end : Carbon::now();
-                $occupiedMonths = max(0, (int) ceil($start->diffInMonths($elapsed, false)));
-            }
-
-            $totalMonths = $this->monthsSince($room->created_at);
-            $occupiedMonths = min($occupiedMonths, $totalMonths);
-            $occupancy = $totalMonths > 0 ? round(($occupiedMonths / $totalMonths) * 100, 1) : 0;
+            [$occupiedMonths, $totalMonths] = $this->occupancyFor($room, $fromDate, $toDate);
 
             return [
                 'id' => $room->id,
@@ -203,10 +185,63 @@ class ReportService
                 'rent_amount' => (float) $room->rent_amount,
                 'occupied_months' => $occupiedMonths,
                 'total_months' => $totalMonths,
-                'total_revenue' => $revenue,
-                'occupancy_rate' => $occupancy,
+                'total_revenue' => (float) $charges->sum('paid_amount'),
+                'occupancy_rate' => $totalMonths > 0 ? round(($occupiedMonths / $totalMonths) * 100, 1) : 0,
             ];
         })->values();
+    }
+
+    /**
+     * How many of the calendar months in the window had a tenant at all.
+     *
+     * Every tenancy counts, ended or not: the dates on the rentals are the
+     * truth, not whatever status label was applied later. A tenancy counts a
+     * month as occupied when its [start, end ?? today] overlaps that month at
+     * all. Future-start tenancies do not occupy months before they begin, and
+     * nothing is ever counted past today, so the rate can never exceed 100%.
+     *
+     * The window defaults to the room's whole life (created_at -> today) and is
+     * scoped to from_date/to_date when the caller supplies them, so the
+     * occupancy figures follow the same window as the revenue figures.
+     *
+     * @return array{int, int} [occupied_months, total_months]
+     */
+    protected function occupancyFor(Room $room, ?string $fromDate, ?string $toDate): array
+    {
+        $windowStart = $fromDate
+            ? Carbon::parse($fromDate)->startOfDay()
+            : Carbon::parse($room->created_at)->startOfDay();
+        $windowEnd = ($toDate ? Carbon::parse($toDate) : Carbon::now())->startOfDay();
+
+        // An inverted (or empty) window has no elapsed period to rate against.
+        if ($windowEnd->lt($windowStart)) {
+            return [0, 1];
+        }
+
+        $firstMonth = $windowStart->copy()->startOfMonth();
+        $totalMonths = max(1, (int) $firstMonth->diffInMonths($windowEnd->copy()->startOfMonth()) + 1);
+
+        $occupied = 0;
+        $now = Carbon::now();
+        foreach ($room->rentals as $rental) {
+            if (! $rental->start_date) {
+                continue;
+            }
+
+            $tenantStart = Carbon::parse($rental->start_date);
+            $tenantEnd = $rental->end_date ? Carbon::parse($rental->end_date) : $now;
+
+            for ($i = 0; $i < $totalMonths; $i++) {
+                $monthStart = $firstMonth->copy()->addMonths($i);
+                $monthEnd = $monthStart->copy()->endOfMonth();
+
+                if ($tenantStart->lte($monthEnd) && $tenantEnd->gte($monthStart)) {
+                    $occupied++;
+                }
+            }
+        }
+
+        return [min($occupied, $totalMonths), $totalMonths];
     }
 
     public function houseReport(?int $houseId = null, ?string $fromDate = null, ?string $toDate = null): Collection
@@ -333,10 +368,5 @@ class ReportService
             'total_expected' => (float) $rows->sum('expected'),
             'total_outstanding' => (float) $rows->sum('outstanding'),
         ];
-    }
-
-    protected function monthsSince($date): int
-    {
-        return max(1, Carbon::parse($date)->diffInMonths(Carbon::now(), false) + 1);
     }
 }

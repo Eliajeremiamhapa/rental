@@ -19,6 +19,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'role' => RoleMiddleware::class,
             'owner.active' => EnsureOwnerActive::class,
+            'active' => EnsureOwnerActive::class,
             'password.change' => RequirePasswordChange::class,
         ]);
 

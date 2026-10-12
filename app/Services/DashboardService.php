@@ -66,7 +66,7 @@ class DashboardService
         $recentPayments = Payment::whereHas('rentCharge', function ($q) use ($roomIds) {
             $q->whereIn('room_id', $roomIds);
         })
-            ->with('tenant', 'rentCharge.room.house')
+            ->with('tenant', 'rentCharge.room.house', 'receipt')
             ->orderByDesc('payment_date')
             ->limit(5)
             ->get()
@@ -78,6 +78,8 @@ class DashboardService
                 'amount' => $p->amount,
                 'payment_date' => $p->payment_date,
                 'payment_method' => $p->payment_method,
+                'receipt_id' => $p->receipt?->id,
+                'receipt_number' => $p->receipt?->receipt_number,
             ]);
 
         $housePerformance = $owner->houses()->withCount(['rooms as total_rooms'])->get()->map(function ($house) {
