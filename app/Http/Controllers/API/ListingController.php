@@ -19,12 +19,14 @@ class ListingController extends Controller
     {
         $houses = House::query()
             ->where('status', 'active')
-            // A suspended owner must not keep advertising, so their houses are
-            // filtered out of the public marketplace entirely.
-            ->whereHas('owner', fn ($q) => $q->where('is_active', true))
+            // A suspended or unverified owner must not advertise, so their
+            // houses are filtered out of the public marketplace entirely.
+            ->whereHas('owner', fn ($q) => $q
+                ->where('is_active', true)
+                ->where('verification_status', 'approved'))
             ->withCount(['rooms as available_rooms' => fn ($q) => $q->where('status', 'available')])
             ->withMin(['rooms as min_rent' => fn ($q) => $q->where('status', 'available')], 'rent_amount')
-            ->with(['owner:id,name,phone', 'media'])
+            ->with(['owner:id,name,phone,role,verification_status', 'media'])
             ->when($request->search, fn ($q, $search) => $q->where(function ($wq) use ($search) {
                 $wq->where('name', 'like', "%{$search}%")
                     ->orWhere('address', 'like', "%{$search}%");
@@ -38,6 +40,7 @@ class ListingController extends Controller
                     ->where('rent_amount', '<=', (float) $request->max_rent);
             }))
             ->whereHas('rooms', fn ($q) => $q->where('status', 'available'))
+            ->when($request->filled('owner_id'), fn ($q) => $q->where('user_id', (int) $request->integer('owner_id')))
             ->orderBy('min_rent')
             ->get();
 
@@ -52,8 +55,10 @@ class ListingController extends Controller
             'images' => $house->media->where('type', 'image')->map(fn (Media $m) => $m->publicUrl())->values(),
             'video' => optional($house->media->firstWhere('type', 'video'))->publicUrl(),
             'owner' => [
+                'id' => $house->owner?->id,
                 'name' => $house->owner?->name,
                 'phone' => $house->owner?->phone,
+                'verified' => (bool) $house->owner?->isVerifiedOwner(),
             ],
         ]);
 
@@ -69,11 +74,11 @@ class ListingController extends Controller
             abort(404, 'House not found.');
         }
 
-        $house->loadMissing(['owner:id,name,phone,is_active', 'media']);
+        $house->loadMissing(['owner:id,name,phone,is_active,role,verification_status', 'media']);
 
-        // Suspended owners are hidden from the marketplace, so their detail page
-        // disappears alongside their listings.
-        if (! $house->owner?->is_active) {
+        // Suspended or unverified owners are hidden from the marketplace, so
+        // their detail page disappears alongside their listings.
+        if (! $house->owner?->is_active || ! $house->owner?->isVerifiedOwner()) {
             abort(404, 'House not found.');
         }
 
@@ -95,8 +100,10 @@ class ListingController extends Controller
                     'images' => $house->media->where('type', 'image')->map(fn (Media $m) => $m->publicUrl())->values(),
                     'video' => optional($house->media->firstWhere('type', 'video'))->publicUrl(),
                     'owner' => [
+                        'id' => $house->owner?->id,
                         'name' => $house->owner?->name,
                         'phone' => $house->owner?->phone,
+                        'verified' => (bool) $house->owner?->isVerifiedOwner(),
                     ],
                 ],
                 'rooms' => $rooms->map(fn ($room) => [

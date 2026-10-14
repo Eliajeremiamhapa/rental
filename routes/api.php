@@ -1,15 +1,22 @@
 <?php
 
+use App\Http\Controllers\API\Admin\FeedbackController as AdminFeedbackController;
+use App\Http\Controllers\API\Admin\OwnerReportController as AdminOwnerReportController;
 use App\Http\Controllers\API\Admin\UserController as AdminUserController;
+use App\Http\Controllers\API\Admin\VerificationController as AdminVerificationController;
 use App\Http\Controllers\API\AssignmentController;
 use App\Http\Controllers\API\AuthController;
+use App\Http\Controllers\API\BrandingController;
 use App\Http\Controllers\API\ContractController;
 use App\Http\Controllers\API\ContractSignController;
 use App\Http\Controllers\API\DashboardController;
+use App\Http\Controllers\API\FeedbackController;
 use App\Http\Controllers\API\HouseController;
 use App\Http\Controllers\API\ListingController;
 use App\Http\Controllers\API\MediaController;
 use App\Http\Controllers\API\NotificationController;
+use App\Http\Controllers\API\OwnerReportController;
+use App\Http\Controllers\API\OwnerVerificationController;
 use App\Http\Controllers\API\PaymentController;
 use App\Http\Controllers\API\ProfileController;
 use App\Http\Controllers\API\ReceiptController;
@@ -43,7 +50,19 @@ Route::middleware('throttle:20,1')->prefix('contracts/sign')->group(function () 
     Route::post('/{token}/decline', [ContractSignController::class, 'decline'])->where('token', '[A-Za-z0-9]{64}');
 });
 
-Route::middleware(['auth:sanctum', 'role:owner', 'owner.active', 'password.change'])->prefix('owner')->group(function () {
+// Owner verification: reachable by an owner who is NOT yet approved, so they can
+// upload documents and see their status. Everything else under /owner requires
+// owner.verified.
+Route::middleware(['auth:sanctum', 'role:owner', 'owner.active', 'password.change'])
+    ->prefix('owner/verification')
+    ->group(function () {
+        Route::get('/', [OwnerVerificationController::class, 'show']);
+        Route::post('/documents', [OwnerVerificationController::class, 'storeDocument']);
+        Route::delete('/documents/{document}', [OwnerVerificationController::class, 'destroyDocument']);
+        Route::post('/submit', [OwnerVerificationController::class, 'submit']);
+    });
+
+Route::middleware(['auth:sanctum', 'role:owner', 'owner.active', 'owner.verified', 'password.change'])->prefix('owner')->group(function () {
     Route::get('/dashboard', [DashboardController::class, 'owner']);
 
     // Rental requests from self-registered tenants.
@@ -111,6 +130,25 @@ Route::middleware(['auth:sanctum', 'role:admin', 'active', 'password.change'])->
     Route::post('/users/{user}/grant-admin', [AdminUserController::class, 'grantAdmin']);
     Route::post('/users/{user}/revoke-admin', [AdminUserController::class, 'revokeAdmin']);
     Route::post('/users/{user}/reset-password', [AdminUserController::class, 'resetPassword']);
+
+    // Owner verification queue: review uploaded identity/ownership documents
+    // and approve or reject the account.
+    Route::get('/owner-verifications', [AdminVerificationController::class, 'index']);
+    Route::post('/users/{user}/approve', [AdminVerificationController::class, 'approve']);
+    Route::post('/users/{user}/reject', [AdminVerificationController::class, 'reject']);
+    Route::get('/verification-documents/{document}', [AdminVerificationController::class, 'streamDocument']);
+
+    // Owner reports: tenants flag misbehaving owners; admins moderate them and
+    // can suspend the owner from the same view. The reported owner is never
+    // notified that a report exists.
+    Route::get('/owner-reports', [AdminOwnerReportController::class, 'index']);
+    Route::get('/owner-reports/{ownerReport}', [AdminOwnerReportController::class, 'show']);
+    Route::patch('/owner-reports/{ownerReport}', [AdminOwnerReportController::class, 'update']);
+
+    // Platform feedback from owners and tenants.
+    Route::get('/feedback', [AdminFeedbackController::class, 'index']);
+    Route::get('/feedback/{feedback}', [AdminFeedbackController::class, 'show']);
+    Route::patch('/feedback/{feedback}', [AdminFeedbackController::class, 'update']);
 });
 
 Route::middleware(['auth:sanctum', 'active', 'password.change'])->group(function () {
@@ -152,13 +190,37 @@ Route::middleware(['auth:sanctum', 'active', 'password.change'])->group(function
     Route::post('/notifications/read-all', [NotificationController::class, 'markAllRead']);
     Route::delete('/notifications/{notification}', [NotificationController::class, 'destroy']);
 
+    // Product feedback from any signed-in owner or tenant.
+    Route::get('/feedback', [FeedbackController::class, 'index']);
+    Route::post('/feedback', [FeedbackController::class, 'store']);
+
     // The tenant's own view of their contracts, backing "My Contracts". Scoped
     // by the signed-in tenant, so no tenant can read another's tenancy terms.
     Route::middleware('role:tenant')->group(function () {
         Route::get('/rental-requests', [RentalRequestController::class, 'tenantIndex']);
         Route::post('/rental-requests', [RentalRequestController::class, 'store']);
 
+        // Reporting an owner the tenant has a standing relationship with.
+        Route::get('/owner-reports/eligible-owners', [OwnerReportController::class, 'eligibleOwners']);
+        Route::get('/owner-reports', [OwnerReportController::class, 'index']);
+        Route::post('/owner-reports', [OwnerReportController::class, 'store']);
+        Route::post('/owner-reports/{ownerReport}/evidence', [OwnerReportController::class, 'addEvidence']);
+
+        // First-time tenants confirm they verified a reserved room is genuine.
+        // Informational only — it never blocks signing.
+        Route::post('/rentals/{rental}/confirm-proceed', [RentalController::class, 'confirmProceed']);
+
         Route::get('/contracts', [TenantContractController::class, 'index']);
         Route::get('/contracts/{id}', [TenantContractController::class, 'show'])->where('id', '[0-9]+');
     });
+});
+
+// Branding
+Route::get('/branding', [BrandingController::class, 'index']);
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('/branding/me', [BrandingController::class, 'me']);
+    Route::post('/branding/logo', [BrandingController::class, 'uploadLogo']);
+    Route::delete('/branding/logo', [BrandingController::class, 'destroyLogo']);
+    Route::post('/branding/signature', [BrandingController::class, 'uploadSignature']);
+    Route::delete('/branding/signature', [BrandingController::class, 'destroySignature']);
 });

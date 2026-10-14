@@ -38,7 +38,41 @@ class UserFactory extends Factory
 
     public function owner(): static
     {
-        return $this->state(fn () => ['role' => 'owner']);
+        // Approved by default so tests and seeds that just want "an owner who
+        // can list" are not forced to walk the verification flow. Use
+        // unverifiedOwner()/pendingOwner()/rejectedOwner() to exercise the gate.
+        return $this->state(fn () => [
+            'role' => 'owner',
+            'verification_status' => 'approved',
+            'verified_at' => now(),
+        ]);
+    }
+
+    public function unverifiedOwner(): static
+    {
+        return $this->state(fn () => [
+            'role' => 'owner',
+            'verification_status' => 'unsubmitted',
+            'verified_at' => null,
+        ]);
+    }
+
+    public function pendingOwner(): static
+    {
+        return $this->state(fn () => [
+            'role' => 'owner',
+            'verification_status' => 'pending',
+            'verified_at' => null,
+        ]);
+    }
+
+    public function rejectedOwner(): static
+    {
+        return $this->state(fn () => [
+            'role' => 'owner',
+            'verification_status' => 'rejected',
+            'verified_at' => null,
+        ]);
     }
 
     public function tenant(): static

@@ -64,7 +64,11 @@ class ListingTest extends TestCase
         $this->assertArrayNotHasKey('user_id', $row);
         $this->assertArrayNotHasKey('status', $row);
         $this->assertArrayNotHasKey('rentals', $row);
-        $this->assertCount(2, $row['owner']);
+        $this->assertSame(
+            ['id', 'name', 'phone', 'verified'],
+            array_keys($row['owner']),
+        );
+        $this->assertTrue($row['owner']['verified']);
     }
 
     public function test_public_listings_support_search_and_rent_filtering(): void
@@ -81,6 +85,21 @@ class ListingTest extends TestCase
 
         $budget = $this->getJson('/api/listings/houses?max_rent=90000')->json('data');
         $this->assertCount(2, $budget);
+    }
+
+    public function test_public_listings_can_be_scoped_to_a_single_owner(): void
+    {
+        Room::factory()->forHouse($this->house)->create(['rent_amount' => 80000, 'status' => 'available']);
+
+        $otherOwner = User::factory()->owner()->create(['must_change_password' => false, 'is_active' => true]);
+        $otherHouse = House::factory()->forOwner($otherOwner)->create(['name' => 'Other House', 'status' => 'active']);
+        Room::factory()->forHouse($otherHouse)->create(['rent_amount' => 70000, 'status' => 'available']);
+
+        $scoped = $this->getJson('/api/listings/houses?owner_id='.$this->owner->id)->json('data');
+
+        $this->assertCount(1, $scoped);
+        $this->assertSame($this->owner->id, $scoped[0]['owner']['id']);
+        $this->assertSame('Upanga Apartments', $scoped[0]['name']);
     }
 
     public function test_public_house_detail_lists_only_available_rooms(): void

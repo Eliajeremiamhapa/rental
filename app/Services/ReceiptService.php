@@ -99,8 +99,8 @@ class ReceiptService
             : ($receipt->house?->owner?->name ?? $companyName);
         $signatory = e($signatoryName ?: '-');
 
-        $logo = $this->embedImage(config('services.receipt.logo_path'));
-        $signature = $this->embedImage(config('services.receipt.signature_path'));
+        $logo = $this->embedImage($settings?->logo_path) ?: $this->embedImage(config('services.receipt.logo_path'));
+        $signature = $this->embedImage($settings?->signature_path) ?: $this->embedImage(config('services.receipt.signature_path'));
 
         $logoHtml = $logo
             ? '<img src="'.$logo.'" alt="'.e($companyName).' logo" class="logo">'

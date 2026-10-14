@@ -2,10 +2,14 @@
 
 namespace App\Services;
 
+use App\Models\Feedback;
 use App\Models\Notification;
+use App\Models\OwnerReport;
 use App\Models\Payment;
+use App\Models\Rental;
 use App\Models\RentalRequest;
 use App\Models\RentCharge;
+use App\Models\User;
 use Illuminate\Database\Eloquent\Model;
 
 class NotificationService
@@ -298,6 +302,160 @@ class NotificationService
                 ? "Your request for {$request->room?->name} was declined: {$request->response_message}"
                 : "Your request for {$request->room?->name} was declined.",
             $request,
+        );
+    }
+
+    public function notifyOwnerVerified(User $user): Notification
+    {
+        $brand = config('services.receipt.company_name', 'Nipangishe');
+
+        $this->sms($user->phone, "Congratulations {$user->name}, your {$brand} owner account has been verified. You can now list and manage your properties.");
+
+        return $this->create(
+            $user->id,
+            'owner_verified',
+            'Account Verified',
+            'Your owner account has been verified. You can now list and manage your properties.',
+            $user,
+        );
+    }
+
+    public function notifyOwnerRejected(User $user, string $reason): Notification
+    {
+        $brand = config('services.receipt.company_name', 'Nipangishe');
+
+        $this->sms($user->phone, "Dear {$user->name}, your {$brand} owner verification was not approved: {$reason}. Please update your documents and resubmit.");
+
+        return $this->create(
+            $user->id,
+            'owner_rejected',
+            'Verification Needs Attention',
+            "Your owner verification was not approved: {$reason}. Please update your documents and resubmit.",
+            $user,
+        );
+    }
+
+    /**
+     * The tenant confirmed a first-time reservation is genuine. Recorded for
+     * dispute history; the owner is told so they know the reservation stands.
+     */
+    public function notifyReservationConfirmed(Rental $rental): ?Notification
+    {
+        $ownerId = $rental->house?->user_id;
+        if (! $ownerId) {
+            return null;
+        }
+
+        return $this->create(
+            $ownerId,
+            'visit_confirmed',
+            'Tenant Confirmed Reservation',
+            "{$rental->tenant?->full_name} confirmed {$rental->room?->name} and is ready to proceed.",
+            $rental,
+        );
+    }
+
+    public function notifyReservationReleased(Rental $rental): void
+    {
+        $tenantUser = $rental->tenant?->user;
+        $roomName = $rental->room?->name ?? 'the room';
+        $ownerId = $rental->house?->user_id;
+
+        $this->sms($tenantUser?->phone, "The hold on {$roomName} has expired and the room is available again. You can still request it if you are interested.");
+
+        if ($tenantUser) {
+            $this->create(
+                $tenantUser->id,
+                'reservation_released',
+                'Reservation Released',
+                "The reservation window for {$roomName} has ended and the room is available again.",
+                $rental,
+            );
+        }
+
+        if ($ownerId) {
+            $this->create(
+                $ownerId,
+                'reservation_released',
+                'Reservation Released',
+                "The reservation for {$roomName} expired and the room is available again.",
+                $rental,
+            );
+        }
+    }
+
+    public function notifyReservationExpiring(Rental $rental, int $hoursLeft): ?Notification
+    {
+        $tenantUser = $rental->tenant?->user;
+        if (! $tenantUser) {
+            return null;
+        }
+
+        $roomName = $rental->room?->name ?? 'the room';
+
+        $this->sms($tenantUser->phone, "Reminder: the reservation for {$roomName} expires in about {$hoursLeft} hour(s). Confirm you are ready, or the room will be released.");
+
+        return $this->create(
+            $tenantUser->id,
+            'reservation_expiring',
+            'Reservation Expiring Soon',
+            "The reservation for {$roomName} expires in about {$hoursLeft} hour(s). Confirm you are ready to proceed.",
+            $rental,
+        );
+    }
+
+    /**
+     * Notify all active administrators with a system notification.
+     */
+    public function notifyAdmins(string $type, string $title, string $message, ?Model $related = null): void
+    {
+        $admins = User::query()
+            ->where('role', 'admin')
+            ->where('is_active', true)
+            ->get();
+
+        foreach ($admins as $admin) {
+            $this->create($admin->id, $type, $title, $message, $related);
+        }
+    }
+
+    public function notifyOwnerReportReceived(OwnerReport $report): void
+    {
+        $this->notifyAdmins(
+            'owner_report_received',
+            'New Owner Report',
+            'A new owner report has been submitted and requires review.',
+            $report,
+        );
+    }
+
+    public function notifyOwnerReportUpdated(OwnerReport $report): ?Notification
+    {
+        $userId = $report->reporter_id;
+        if (! $userId) {
+            return null;
+        }
+
+        $status = $report->status;
+
+        return $this->create(
+            $userId,
+            'owner_report_updated',
+            'Report Status Updated',
+            "Your report was marked {$status}.",
+            $report,
+        );
+    }
+
+    public function notifyFeedbackReceived(Feedback $feedback): void
+    {
+        $submitterName = $feedback->user?->name ?? 'A user';
+
+        $this->notifyAdmins(
+            'feedback_received',
+            'New Feedback Received',
+            "Feedback from {$submitterName} has been received.",
+            $feedback,
         );
     }
 }

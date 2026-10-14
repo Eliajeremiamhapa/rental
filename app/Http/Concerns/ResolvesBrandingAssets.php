@@ -6,11 +6,6 @@ use App\Models\OwnerSetting;
 
 /**
  * Exposes company branding to anything that renders a document.
- *
- * Receipts and tenancy contracts must both look like the same company, so they
- * read the same settings and resolve them the same way instead of each keeping
- * its own copy of the path handling. When a landlord has configured their own
- * details, those win; otherwise the platform brand is used.
  */
 trait ResolvesBrandingAssets
 {
@@ -21,14 +16,14 @@ trait ResolvesBrandingAssets
      */
     protected function brandingPayload(?OwnerSetting $settings = null): array
     {
-        $hasOwnerBranding = (bool) $settings?->company_name;
+        $hasOwnerBranding = (bool) ($settings?->company_name ?: $settings?->logo_path);
+        $ownerLogoUrl = $this->assetUrl($settings?->logo_path);
+        $ownerSignatureUrl = $this->assetUrl($settings?->signature_path);
 
         return [
-            'company_name' => $hasOwnerBranding
+            'company_name' => $hasOwnerBranding && $settings?->company_name
                 ? $settings->company_name
                 : config('services.receipt.company_name', 'Nipangishe'),
-            // The platform tagline only belongs on platform-branded documents;
-            // a landlord's own letterhead should not carry it.
             'company_slogan' => $hasOwnerBranding
                 ? null
                 : config('services.receipt.company_slogan'),
@@ -36,17 +31,60 @@ trait ResolvesBrandingAssets
                 ?: config('services.receipt.company_phone'),
             'company_address' => $settings?->address
                 ?: config('services.receipt.company_address'),
-            'logo_url' => $this->assetUrl(config('services.receipt.logo_path')),
-            'signature_url' => $this->assetUrl(config('services.receipt.signature_path')),
+            'logo_url' => $ownerLogoUrl ?: $this->assetUrl(config('services.receipt.logo_path')),
+            // A compact mark for bars/headers. An owner's uploaded logo doubles
+            // as its mark; when there is none we return null so the client can
+            // fall back to its bundled symbol instead of the wide lockup.
+            'logo_mark_url' => $ownerLogoUrl,
+            'signature_url' => $ownerSignatureUrl ?: $this->assetUrl(config('services.receipt.signature_path')),
+            'has_logo' => (bool) $settings?->logo_path,
+            'has_signature' => (bool) $settings?->signature_path,
         ];
     }
 
     /**
-     * Resolve a configured logo/signature reference to a browser-reachable URL.
+     * The platform's own identity (the system owner's brand). This is what the
+     * public site, auth screens and unscoped pages must always show, regardless
+     * of who is logged in. It never borrows a landlord's logo.
      *
-     * Files inside public/ are exposed as static URLs (nginx serves public/branding
-     * directly). Absolute paths are not reachable by the browser, so they are only
-     * usable for the downloaded HTML receipt, not for the on-screen preview.
+     * @return array<string, mixed>
+     */
+    protected function platformBrandingPayload(): array
+    {
+        $logoUrl = $this->assetUrl(config('services.receipt.logo_path'));
+        $signatureUrl = $this->assetUrl(config('services.receipt.signature_path'));
+
+        return [
+            'company_name' => config('services.receipt.company_name', 'Nipangishe'),
+            'company_slogan' => config('services.receipt.company_slogan'),
+            'company_phone' => config('services.receipt.company_phone'),
+            'company_address' => config('services.receipt.company_address'),
+            'logo_url' => $logoUrl,
+            // The platform's own mark is bundled with the client, so there is
+            // no server-side mark URL to hand back.
+            'logo_mark_url' => null,
+            'signature_url' => $signatureUrl,
+            'has_logo' => (bool) $logoUrl,
+            'has_signature' => (bool) $signatureUrl,
+        ];
+    }
+
+    /**
+     * Logo-only branding for anonymous/public lookups: a visitor viewing a
+     * specific owner's listings must never receive the owner's signature.
+     *
+     * @return array<string, mixed>
+     */
+    protected function publicBrandingPayload(?OwnerSetting $settings = null): array
+    {
+        $payload = $this->brandingPayload($settings);
+        unset($payload['signature_url'], $payload['has_signature']);
+
+        return $payload;
+    }
+
+    /**
+     * Resolve a configured logo/signature reference to a browser-reachable URL.
      */
     protected function assetUrl(?string $path): ?string
     {
@@ -58,19 +96,25 @@ trait ResolvesBrandingAssets
             return $path;
         }
 
-        // An absolute filesystem path exists but is not reachable by a browser.
-        // It still works for the downloaded HTML receipt, which embeds the file
-        // inline, but there is no URL to hand to the browser for the preview.
         if (str_starts_with($path, '/') || preg_match('#^[A-Za-z]:[\\\\/]#', $path)) {
             return null;
         }
 
-        // A path relative to public/, e.g. "branding/logo.png".
         $relative = ltrim((string) preg_replace('#^public/#', '', $path), '/');
+        $publicPath = public_path($relative);
+        if (is_file($publicPath)) {
+            return '/'.$relative;
+        }
 
-        // Root-relative rather than asset(), so the URL works on any host, port
-        // or domain the app happens to be served from (localhost during
-        // development, the real domain in production).
-        return is_file(public_path($relative)) ? '/'.$relative : null;
+        $storageRelative = ltrim((string) preg_replace('#^storage/#', '', $path), '/');
+        if ($storageRelative !== $relative && is_file(public_path('storage/'.$storageRelative))) {
+            return '/storage/'.$storageRelative;
+        }
+
+        if (is_file(storage_path('app/public/'.$relative))) {
+            return '/storage/'.$relative;
+        }
+
+        return null;
     }
 }

@@ -120,6 +120,77 @@ class ContractBrandingTest extends TestCase
         $this->assertSame('Uvimo', $payload['company_name']);
         $this->assertSame('/branding/logo.png', $payload['logo_url']);
         $this->assertSame('/branding/signature.png', $payload['signature_url']);
+        // No owner logo, so there is no server-side mark to hand back: the
+        // client falls back to its bundled symbol.
+        $this->assertNull($payload['logo_mark_url']);
+    }
+
+    public function test_platform_branding_has_no_mark_url(): void
+    {
+        $data = $this->getJson('/api/branding')->assertOk()->json('data');
+
+        $this->assertArrayHasKey('logo_mark_url', $data);
+        $this->assertNull($data['logo_mark_url']);
+    }
+
+    public function test_owner_uploaded_logo_is_also_returned_as_the_mark(): void
+    {
+        $this->owner->settings()->create(['logo_path' => 'branding/logo.png']);
+
+        $data = $this->getJson('/api/branding?owner_id='.$this->owner->id)
+            ->assertOk()
+            ->json('data');
+
+        $this->assertSame('/branding/logo.png', $data['logo_url']);
+        $this->assertSame('/branding/logo.png', $data['logo_mark_url']);
+    }
+
+    public function test_public_owner_lookup_returns_logo_but_never_signature(): void
+    {
+        // No auth token: this is the anonymous marketplace lookup.
+        $data = $this->getJson('/api/branding?owner_id='.$this->owner->id)
+            ->assertOk()
+            ->json('data');
+
+        $this->assertNotEmpty($data['logo_url']);
+        $this->assertArrayNotHasKey('signature_url', $data);
+    }
+
+    public function test_tenant_sees_their_landlord_branding(): void
+    {
+        $this->owner->settings()->create(['company_name' => 'Landlord Co']);
+
+        Sanctum::actingAs($this->tenantUser);
+
+        $data = $this->getJson('/api/branding/me')->assertOk()->json('data');
+
+        $this->assertSame('Landlord Co', $data['company_name']);
+        $this->assertArrayHasKey('signature_url', $data);
+    }
+
+    public function test_public_branding_stays_platform_branded_for_a_signed_in_user(): void
+    {
+        config()->set('services.receipt.company_name', 'Platform Co');
+        $this->owner->settings()->create(['company_name' => 'Landlord Co']);
+
+        Sanctum::actingAs($this->tenantUser);
+
+        // The unscoped public endpoint must never leak the landlord's brand
+        // onto the platform (system owner) pages.
+        $data = $this->getJson('/api/branding')->assertOk()->json('data');
+
+        $this->assertSame('Platform Co', $data['company_name']);
+    }
+
+    public function test_owner_sees_their_own_branding_on_me(): void
+    {
+        $this->owner->settings()->create(['company_name' => 'Landlord Co']);
+
+        Sanctum::actingAs($this->owner);
+
+        $data = $this->getJson('/api/branding/me')->assertOk()->json('data');
+
+        $this->assertSame('Landlord Co', $data['company_name']);
     }
 
     public function test_public_signing_view_carries_branding(): void

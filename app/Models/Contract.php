@@ -217,13 +217,21 @@ class Contract extends Model
     public function generateContractNumber(): string
     {
         $year = now()->year;
-        $last = static::where('contract_number', 'like', "UV-{$year}-%")
+
+        // Match both the legacy "UV-{year}-..." numbers and the current
+        // "{year}-..." format so removing the prefix never restarts the
+        // sequence for a landlord who already has contracts this year.
+        $last = static::query()
+            ->where(function (Builder $query) use ($year): void {
+                $query->where('contract_number', 'like', "UV-{$year}-%")
+                    ->orWhere('contract_number', 'like', "{$year}-%");
+            })
             ->orderByDesc('id')
             ->lockForUpdate()
             ->value('contract_number');
 
         $seq = $last ? ((int) Str::afterLast($last, '-')) + 1 : 1;
 
-        return sprintf('UV-%d-%04d', $year, $seq);
+        return sprintf('%d-%04d', $year, $seq);
     }
 }

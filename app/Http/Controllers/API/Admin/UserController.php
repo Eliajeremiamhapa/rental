@@ -264,7 +264,9 @@ class UserController extends Controller
         }
 
         try {
-            $message = "Dear {$user->name}, your Nipangishe password has been reset. Your temporary login password is: {$temporaryPassword}. Sign in with your phone number and change it after your next login.";
+            $brand = config('services.receipt.company_name', 'Nipangishe');
+
+            $message = "Dear {$user->name}, your {$brand} password has been reset. Your temporary login password is: {$temporaryPassword}. Sign in with your phone number and change it after your next login.";
 
             return $this->sms->send($user->phone, $message);
         } catch (\Throwable $e) {

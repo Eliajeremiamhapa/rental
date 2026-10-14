@@ -25,7 +25,7 @@ class ContractFactory extends Factory
         $rent = 160000.00;
 
         return [
-            'contract_number' => sprintf('UV-%d-%04d', now()->year, fake()->unique()->numberBetween(1, 9999)),
+            'contract_number' => sprintf('%d-%04d', now()->year, fake()->unique()->numberBetween(1, 9999)),
             'rental_id' => Rental::factory(),
             'tenant_id' => Tenant::factory(),
             'house_id' => House::factory(),

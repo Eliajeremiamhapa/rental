@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Middleware\EnsureOwnerActive;
+use App\Http\Middleware\EnsureOwnerVerified;
 use App\Http\Middleware\RequirePasswordChange;
 use App\Http\Middleware\RoleMiddleware;
 use Illuminate\Foundation\Application;
@@ -19,6 +20,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'role' => RoleMiddleware::class,
             'owner.active' => EnsureOwnerActive::class,
+            'owner.verified' => EnsureOwnerVerified::class,
             'active' => EnsureOwnerActive::class,
             'password.change' => RequirePasswordChange::class,
         ]);

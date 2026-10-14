@@ -18,6 +18,8 @@ class OwnerSetting extends Model
         'contact_phone',
         'contact_email',
         'address',
+        'logo_path',
+        'signature_path',
         'currency',
         'payment_accounts',
         'lipa_namba',

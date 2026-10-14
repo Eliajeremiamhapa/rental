@@ -23,6 +23,7 @@ class Room extends Model
         'description',
         'rent_amount',
         'status',
+        'reserved_until',
     ];
 
     protected function casts(): array
@@ -30,6 +31,7 @@ class Room extends Model
         return [
             'rent_amount' => 'decimal:2',
             'status' => 'string',
+            'reserved_until' => 'datetime',
         ];
     }
 

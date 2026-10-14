@@ -22,6 +22,10 @@ class User extends Authenticatable
         'password',
         'role',
         'previous_role',
+        'verification_status',
+        'verified_at',
+        'verified_by',
+        'verification_note',
         'id_number',
         'address',
         'emergency_contact',
@@ -44,12 +48,18 @@ class User extends Authenticatable
             'is_active' => 'boolean',
             'must_change_password' => 'boolean',
             'last_login_at' => 'datetime',
+            'verified_at' => 'datetime',
         ];
     }
 
     public function houses(): HasMany
     {
         return $this->hasMany(House::class);
+    }
+
+    public function settings(): HasOne
+    {
+        return $this->hasOne(OwnerSetting::class, 'user_id');
     }
 
     public function tenant(): HasOne
@@ -67,6 +77,11 @@ class User extends Authenticatable
         return $this->hasMany(Notification::class);
     }
 
+    public function verificationDocuments(): HasMany
+    {
+        return $this->hasMany(VerificationDocument::class);
+    }
+
     public function isOwner(): bool
     {
         return $this->role === 'owner';
@@ -80,5 +95,14 @@ class User extends Authenticatable
     public function isAdmin(): bool
     {
         return $this->role === 'admin';
+    }
+
+    /**
+     * An owner may only list and manage once an administrator has approved
+     * their identity and ownership documents.
+     */
+    public function isVerifiedOwner(): bool
+    {
+        return $this->isOwner() && $this->verification_status === 'approved';
     }
 }

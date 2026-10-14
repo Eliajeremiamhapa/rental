@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Rental;
 use App\Models\Room;
 use App\Models\Tenant;
+use App\Services\NotificationService;
 use App\Services\RentChargeService;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
@@ -19,6 +20,7 @@ class RentalController extends Controller
 
     public function __construct(
         protected RentChargeService $rentChargeService,
+        protected NotificationService $notifications,
     ) {}
 
     public function index(Request $request): JsonResponse
@@ -57,6 +59,25 @@ class RentalController extends Controller
             'success' => true,
             'message' => 'Rental retrieved successfully.',
             'data' => $rental,
+        ]);
+    }
+
+    /**
+     * The tenant (or their trusted agent) confirms a reserved room is genuine.
+     * Purely informational — it never blocks signing — but it clears the
+     * due-diligence note and records the affirmation for dispute history.
+     */
+    public function confirmProceed(Request $request, Rental $rental): JsonResponse
+    {
+        abort_unless($rental->tenant?->user_id === $request->user()->id, 404);
+
+        $rental->confirmProceed();
+        $this->notifications->notifyReservationConfirmed($rental);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Thank you. You can proceed with the next steps whenever you are ready.',
+            'data' => $rental->fresh()->load(['tenant', 'room.house']),
         ]);
     }
 

@@ -102,6 +102,33 @@ class RentalRequestController extends Controller
             ->orderByDesc('created_at')
             ->get();
 
+        // An accepted request holds its room for a due-diligence window. Surface
+        // that hold (and whether the tenant still owes a confirmation) so the
+        // tenant can see the countdown and act from their request list.
+        $requests->each(function (RentalRequest $rentalRequest) {
+            if ($rentalRequest->status !== RentalRequest::STATUS_ACCEPTED) {
+                return;
+            }
+
+            $rental = Rental::query()
+                ->where('room_id', $rentalRequest->room_id)
+                ->where('tenant_id', $rentalRequest->tenant_id)
+                ->where('status', 'pending')
+                ->latest('id')
+                ->first();
+
+            if (! $rental) {
+                return;
+            }
+
+            $rentalRequest->setAttribute('reservation', [
+                'rental_id' => $rental->id,
+                'due_diligence_required' => (bool) $rental->due_diligence_required,
+                'visit_confirmed_at' => $rental->visit_confirmed_at,
+                'reserved_until' => $rentalRequest->room?->reserved_until,
+            ]);
+        });
+
         return response()->json([
             'success' => true,
             'data' => $requests,
@@ -120,6 +147,31 @@ class RentalRequestController extends Controller
             ->orderByRaw("CASE status WHEN 'pending' THEN 0 WHEN 'accepted' THEN 1 WHEN 'declined' THEN 2 ELSE 3 END")
             ->orderByDesc('created_at')
             ->get();
+
+        // Show owners how long an accepted (reserved) room is still held.
+        $requests->each(function (RentalRequest $rentalRequest) {
+            if ($rentalRequest->status !== RentalRequest::STATUS_ACCEPTED) {
+                return;
+            }
+
+            $rental = Rental::query()
+                ->where('room_id', $rentalRequest->room_id)
+                ->where('tenant_id', $rentalRequest->tenant_id)
+                ->where('status', 'pending')
+                ->latest('id')
+                ->first();
+
+            if (! $rental) {
+                return;
+            }
+
+            $rentalRequest->setAttribute('reservation', [
+                'rental_id' => $rental->id,
+                'due_diligence_required' => (bool) $rental->due_diligence_required,
+                'visit_confirmed_at' => $rental->visit_confirmed_at,
+                'reserved_until' => $rentalRequest->room?->reserved_until,
+            ]);
+        });
 
         return response()->json([
             'success' => true,
@@ -199,6 +251,26 @@ class RentalRequestController extends Controller
             }
         }
 
+        // A tenant may hold only one reservation at a time, so accepting this
+        // request cannot silently reserve a second room on their behalf.
+        $existingHold = Rental::query()
+            ->where('tenant_id', $tenant->id)
+            ->where('status', 'pending')
+            ->exists();
+
+        if ($existingHold) {
+            return response()->json([
+                'success' => false,
+                'message' => 'This tenant already has a room reserved. Let that reservation finish or expire before accepting another request.',
+            ], 422);
+        }
+
+        // First-time tenants get a due-diligence window: the room is held so
+        // they can confirm it is genuine before committing to a contract.
+        $dueDiligenceRequired = ! Rental::query()->where('tenant_id', $tenant->id)->exists();
+        $reservationHours = (int) config('rental.reservation_hours', 72);
+        $reservedUntil = now()->addHours($reservationHours);
+
         $startDate = $validated['start_date']
             ? Carbon::parse($validated['start_date'])
             : ($rentalRequest->desired_start_date
@@ -209,7 +281,7 @@ class RentalRequestController extends Controller
         $dueDay = (int) $startDate->format('d');
         $endDate = $startDate->copy()->addMonths($periodMonths)->subDay();
 
-        [$rental, $rentalRequest] = DB::transaction(function () use ($validated, $rentalRequest, $owner, $room, $tenant, $startDate, $endDate, $dueDay, $periodMonths) {
+        [$rental, $rentalRequest] = DB::transaction(function () use ($validated, $rentalRequest, $owner, $room, $tenant, $startDate, $endDate, $dueDay, $periodMonths, $reservedUntil, $dueDiligenceRequired) {
             $tenant->update(['owner_id' => $owner->id]);
 
             $rental = Rental::create([
@@ -225,9 +297,10 @@ class RentalRequestController extends Controller
                 'deposit_amount' => $validated['deposit_amount'] ?? 0,
                 'deposit_status' => isset($validated['deposit_amount']) && (float) $validated['deposit_amount'] > 0 ? 'pending' : 'none',
                 'status' => 'pending',
+                'due_diligence_required' => $dueDiligenceRequired,
             ]);
 
-            $room->update(['status' => 'reserved']);
+            $room->update(['status' => 'reserved', 'reserved_until' => $reservedUntil]);
 
             $rentalRequest->update([
                 'status' => RentalRequest::STATUS_ACCEPTED,

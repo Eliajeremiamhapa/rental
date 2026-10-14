@@ -325,7 +325,9 @@ class TenantController extends Controller
         }
 
         try {
-            $message = "Dear {$fullName}, welcome to Nipangishe. Your temporary login password is: {$temporaryPassword}. Sign in with your phone number and change it after your first login.";
+            $brand = config('services.receipt.company_name', 'Nipangishe');
+
+            $message = "Dear {$fullName}, welcome to {$brand}. Your temporary login password is: {$temporaryPassword}. Sign in with your phone number and change it after your first login.";
 
             return $this->sms->send($phone, $message);
         } catch (\Throwable $e) {

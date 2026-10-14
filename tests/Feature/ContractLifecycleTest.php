@@ -115,9 +115,27 @@ class ContractLifecycleTest extends TestCase
 
         $this->assertSame('draft', $contract->status);
         $this->assertSame(160000.0, (float) $contract->rent_amount);
-        $this->assertMatchesRegularExpression('/^UV-\d{4}-\d{4}$/', $contract->contract_number);
+        $this->assertMatchesRegularExpression('/^\d{4}-\d{4}$/', $contract->contract_number);
         $this->assertNotNull($contract->clause_text);
         $this->assertCount(13, $contract->clause_text);
+    }
+
+    public function test_contract_number_continues_the_sequence_after_the_legacy_uv_prefix(): void
+    {
+        $year = now()->year;
+
+        Contract::factory()->create(['contract_number' => "UV-{$year}-0007"]);
+
+        $this->assertSame("{$year}-0008", (new Contract)->generateContractNumber());
+    }
+
+    public function test_contract_number_continues_the_current_year_sequence(): void
+    {
+        $year = now()->year;
+
+        Contract::factory()->create(['contract_number' => "{$year}-0003"]);
+
+        $this->assertSame("{$year}-0004", (new Contract)->generateContractNumber());
     }
 
     public function test_overstay_charge_is_derived_from_the_monthly_rent(): void

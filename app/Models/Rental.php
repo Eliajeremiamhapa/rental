@@ -39,6 +39,8 @@ class Rental extends Model
         'deposit_status',
         'deposit_notes',
         'status',
+        'due_diligence_required',
+        'visit_confirmed_at',
         'terminated_reason',
         'terminated_at',
     ];
@@ -51,6 +53,8 @@ class Rental extends Model
             'rent_amount' => 'decimal:2',
             'deposit_amount' => 'decimal:2',
             'terminated_at' => 'datetime',
+            'visit_confirmed_at' => 'datetime',
+            'due_diligence_required' => 'boolean',
             'period_months' => 'integer',
             'due_day' => 'integer',
         ];
@@ -127,7 +131,7 @@ class Rental extends Model
         }
 
         $this->update(['status' => 'active']);
-        $this->room?->update(['status' => 'occupied']);
+        $this->room?->update(['status' => 'occupied', 'reserved_until' => null]);
 
         $charges->generateChargesForRental($this);
     }
@@ -148,6 +152,20 @@ class Rental extends Model
             'terminated_reason' => $reason ?: 'Contract was not signed.',
         ]);
 
-        $this->room?->update(['status' => 'available']);
+        $this->room?->update(['status' => 'available', 'reserved_until' => null]);
+    }
+
+    /**
+     * The tenant (or their trusted agent) has confirmed the room exists and the
+     * owner is genuine, so the due-diligence note can be cleared. This never
+     * blocks signing — it only records the affirmation for dispute history.
+     */
+    public function confirmProceed(): void
+    {
+        if ($this->visit_confirmed_at) {
+            return;
+        }
+
+        $this->update(['visit_confirmed_at' => now()]);
     }
 }

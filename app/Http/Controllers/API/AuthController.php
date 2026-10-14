@@ -80,6 +80,9 @@ class AuthController extends Controller
                 'email' => $validated['email'] ?? null,
                 'password' => $validated['password'],
                 'role' => $validated['role'],
+                // Owners must be approved by an administrator before they can
+                // list or manage anything; tenants and admins stay null.
+                'verification_status' => $validated['role'] === 'owner' ? 'unsubmitted' : null,
                 'id_number' => $validated['id_number'] ?? null,
                 'address' => $validated['address'] ?? null,
                 'emergency_contact' => $validated['emergency_contact'] ?? null,
@@ -113,7 +116,9 @@ class AuthController extends Controller
 
         return response()->json([
             'success' => true,
-            'message' => 'Account created successfully. Welcome!',
+            'message' => $validated['role'] === 'owner'
+                ? 'Account created. Please complete owner verification to start listing properties.'
+                : 'Account created successfully. Welcome!',
             'data' => [
                 'user' => $user->fresh()->load('tenant'),
                 'token' => $token,
@@ -162,7 +167,9 @@ class AuthController extends Controller
             'created_at' => Carbon::now(),
         ]);
 
-        $message = "Your Nipangishe password reset code is: {$token}. It expires in 15 minutes. If you did not request this, please ignore this message.";
+        $brand = config('services.receipt.company_name', 'Nipangishe');
+
+        $message = "Your {$brand} password reset code is: {$token}. It expires in 15 minutes. If you did not request this, please ignore this message.";
 
         $delivered = $this->sms->send($user->phone, $message);
 

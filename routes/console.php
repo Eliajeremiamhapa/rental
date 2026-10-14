@@ -44,6 +44,14 @@ Schedule::command('rental:notify-overdue')
     ->withoutOverlapping()
     ->onOneServer();
 
+// Release rooms whose due-diligence reservation window has passed (and warn
+// tenants a few hours before), so a held room never stays stuck on "reserved".
+Schedule::command('reservations:release-expired')
+    ->everyFifteenMinutes()
+    ->timezone('Africa/Dar_es_Salaam')
+    ->withoutOverlapping()
+    ->onOneServer();
+
 // Housekeeping: drop revoked/expired Sanctum tokens and stale password resets.
 Schedule::command('sanctum:prune-expired --hours=24')
     ->daily()
